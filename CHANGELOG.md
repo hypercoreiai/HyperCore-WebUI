@@ -50,3 +50,12 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   checks that read `serve/web/app.js` as text.
 - **README**: each tab is described and then shown, with the screenshots in
   `data/media/` (the only files under `data/` that are committed).
+- **Standing tasks in the system prompt** (`prompts/prompt.json`, v9): every chat
+  carries two background duties, the request in front of you still coming first. One
+  distils `data/history/_old_chats/` into `chats/`, `topics/` and `notes/` through
+  `tools/build_history.py`; the other keeps the state files (`.mcp_test_state.json`,
+  `data/history/notes/`, `CHANGELOG.md`) matching what has actually been done, with
+  nothing left in a queue without a reason. Each has a written check that says when it
+  is done. `tests/test_prompt_standing_tasks.py` checks the file parses, the tasks name
+  paths that exist here, and the rendered prompt stays under the 20,000-character
+  ceiling `serve/prompts.py` cuts profiles at.
