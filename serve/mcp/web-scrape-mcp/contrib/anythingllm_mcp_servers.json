@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "web-scrape": {
+      "url": "http://web-scrape-mcp:8766/mcp",
+      "type": "http",
+      "disabled": false,
+      "alwaysAllow": true
+    }
+  }
+}

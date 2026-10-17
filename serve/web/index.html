@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HyperCore</title>
+<link rel="stylesheet" href="web/tokens.css">
+<link rel="stylesheet" href="web/components.css">
+<link rel="stylesheet" href="web/app.css">
+<script>
+  // the theme before the first paint: the saved choice, else the system's
+  try {
+    const t = localStorage.getItem("hypercore.theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<header class="st-header">
+  <span class="st-header__brand">HyperCore<span class="st-header__sub">Powered by Strata</span></span>
+  <nav class="st-tabs" role="tablist" aria-label="Views">
+    <button class="st-tab" role="tab" id="tab-btn-chat" aria-controls="view-chat" aria-selected="true" data-tab="chat">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-chat"/></svg>Chat</button>
+    <button class="st-tab" role="tab" id="tab-btn-assist" aria-controls="view-assist" aria-selected="false" data-tab="assist">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-chat"/></svg>Assist</button>
+    <button class="st-tab" role="tab" id="tab-btn-monitor" aria-controls="view-monitor" aria-selected="false" data-tab="monitor">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-activity"/></svg>Monitor</button>
+    <button class="st-tab" role="tab" id="tab-btn-tune" aria-controls="view-tune" aria-selected="false" data-tab="tune">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-gauge"/></svg>Tune</button>
+    <button class="st-tab" role="tab" id="tab-btn-build" aria-controls="view-build" aria-selected="false" data-tab="build">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-download"/></svg>Build</button>
+    <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-info"/></svg>About</button>
+  </nav>
+  <span class="st-header__spacer"></span>
+  <span class="st-pill" id="pill" data-state="idle" role="status" aria-live="polite">
+    <span class="st-pill__dot"></span><span id="pill-text">Connecting&hellip;</span></span>
+  <button class="st-btn st-btn--danger" id="shutdown-btn" title="Shut down HyperCore: stop the model, the MCP servers and the image encoder, then close this server"
+          aria-label="Shut down HyperCore">
+    <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-power"/></svg><span id="shutdown-text">Shut Down</span></button>
+  <button class="st-btn st-btn--icon" id="theme-btn" title="Light / dark" aria-label="Switch between light and dark">
+    <svg class="st-icon"><use id="theme-icon" href="web/sprite.svg#i-moon"/></svg></button>
+</header>
+
+<main>
+  <!-- ============================ Chat ============================ -->
+  <section class="view view--chat" id="view-chat" role="tabpanel" aria-labelledby="tab-btn-chat">
+    <div class="chat-scroll" id="chat-scroll">
+      <div class="chat" id="chat">
+        <div class="chat-empty" id="chat-empty">
+          <div class="chat-empty__title">Ask anything</div>
+          <div class="chat-empty__sub" id="chat-empty-sub">The model runs on this PC. Nothing leaves it.</div>
+        </div>
+      </div>
+    </div>
+    <div class="composer-wrap">
+      <form class="st-composer" id="composer">
+        <div class="attachments" id="attachments" hidden></div>
+        <textarea id="input" rows="2" placeholder="Ask anything&hellip;" aria-label="Message"></textarea>
+        <div class="st-composer__bar">
+          <button type="button" class="st-btn st-btn--icon" id="attach-btn" title="Attach a text file (or drop it here)" aria-label="Attach a file">
+            <svg class="st-icon"><use href="web/sprite.svg#i-attach"/></svg></button>
+          <input type="file" id="file" multiple hidden>
+          <button type="button" class="st-btn st-btn--icon" id="new-btn" title="New chat" aria-label="New chat">
+            <svg class="st-icon"><use href="web/sprite.svg#i-new-chat"/></svg></button>
+          <button type="button" class="st-btn st-btn--icon" id="export-btn" title="Save this chat as Markdown" aria-label="Save this chat">
+            <svg class="st-icon"><use href="web/sprite.svg#i-download"/></svg></button>
+          <label class="agent-pick" title="Give this chat an agent profile (from prompt.json)">
+            <select id="agent-select" aria-label="Agent profile for this chat">
+              <option value="">System prompt only</option>
+            </select>
+          </label>
+          <button type="button" class="st-btn st-btn--icon" id="sampling-btn" title="Sampling and thinking" aria-label="Sampling and thinking">
+            <svg class="st-icon"><use href="web/sprite.svg#i-settings"/></svg></button>
+          <span class="spacer"></span>
+          <span class="composer-hint" id="composer-hint"></span>
+          <button type="button" class="st-btn st-btn--secondary" id="stop-btn" hidden>
+            <svg class="st-icon st-icon--sm"><use id="stop-icon" href="web/sprite.svg#i-stop"/></svg><span id="stop-text">Stop</span></button>
+          <button type="submit" class="st-btn st-btn--primary st-btn--send" id="send-btn" aria-label="Send">
+            <svg class="st-icon"><use href="web/sprite.svg#i-send"/></svg></button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================ Monitor ============================ -->
+  <section class="view view--monitor" id="view-monitor" role="tabpanel" aria-labelledby="tab-btn-monitor" hidden>
+    <div class="monitor">
+      <div class="st-card state-card">
+        <div class="state-card__head">
+          <span class="card-title">Model state</span>
+          <span class="badges" id="state-badges">
+            <span class="st-badge" data-s="idle">Idle</span>
+            <span class="st-badge st-badge--reading" data-s="reading">Reading</span>
+            <span class="st-badge st-badge--generating" data-s="generating">Generating</span>
+            <span class="st-badge st-badge--queued" data-s="queued">Queued</span>
+            <span class="st-badge st-badge--error" data-s="error">Error</span>
+          </span>
+        </div>
+        <div class="state-card__row"><span id="state-label">Waiting for a request</span><span class="muted" id="state-detail"></span></div>
+        <div class="st-progress" id="state-progress"><div class="st-progress__bar" id="state-bar" style="width:0%"></div></div>
+      </div>
+
+      <div class="metrics" id="metrics">
+        <!-- filled by app.js: Speed, GPU load, VRAM, GPU temp, Power, PCIe, CPU, Disk read -->
+      </div>
+
+      <div class="monitor-row">
+        <div class="st-card ctx-card">
+          <span class="card-title">Context fill</span>
+          <div class="ctx-gauge">
+            <svg class="st-gauge" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="st-gauge__track" cx="60" cy="60" r="50" fill="none" stroke-width="10" stroke-linecap="round"
+                      stroke-dasharray="235.6 314.2" transform="rotate(135 60 60)"/>
+              <circle class="st-gauge__fill" id="ctx-fill" cx="60" cy="60" r="50" fill="none" stroke-width="10"
+                      stroke-linecap="round" stroke-dasharray="0 314.2" transform="rotate(135 60 60)"/>
+            </svg>
+            <div class="ctx-gauge__label"><span class="ctx-gauge__pct" id="ctx-pct">0%</span><span class="muted" id="ctx-sub">&ndash;</span></div>
+          </div>
+          <div class="bar-row"><span>Experts in VRAM</span><span class="muted" id="slots-text">&ndash;</span></div>
+          <div class="st-progress"><div class="st-progress__bar" id="slots-bar" style="width:0%"></div></div>
+          <div class="bar-row"><span>System RAM</span><span class="muted" id="ram-text">&ndash;</span></div>
+          <div class="st-progress" id="ram-progress"><div class="st-progress__bar" id="ram-bar" style="width:0%"></div></div>
+          <div class="bar-row"><span>GPU temperature</span><span class="muted" id="temp-text">&ndash;</span></div>
+          <div class="st-progress" data-tone="warn"><div class="st-progress__bar" id="temp-bar" style="width:0%"></div></div>
+        </div>
+        <div class="st-card req-card">
+          <div class="req-head"><span class="card-title">Recent requests</span>
+            <button class="st-btn st-btn--secondary" id="req-all" hidden>Show all</button></div>
+          <div class="table-wrap" id="req-wrap">
+            <table class="st-table">
+              <thead><tr><th>Time</th><th>Status</th><th class="num">Prompt</th><th class="num">Reused</th><th class="num">Output</th>
+                <th class="num">Tok/s</th><th class="num" title="While writing the answer: the share of the experts looked up that were already in VRAM. Experts the GPU read over PCIe (--pcie-frac) are not counted in it; their share of all routed experts is shown after it (+N% PCIe)">VRAM hit rate</th><th class="num">Duration</th></tr></thead>
+              <tbody id="req-body"><tr><td colspan="8" class="muted">No requests yet</td></tr></tbody>
+            </table>
+          </div>
+          <p class="muted req-totals" id="req-totals"></p>
+        </div>
+      </div>
+
+      <div class="st-card cc-card" id="cc-card">
+        <div class="req-head"><span class="card-title">Conversation cache</span><span class="muted small" id="cc-sum"></span></div>
+        <div class="cc-bars" id="cc-bars" hidden>
+          <div><div class="bar-row"><span>Parked conversations</span><span class="muted" id="cc-slots-text">&ndash;</span></div>
+            <div class="st-progress"><div class="st-progress__bar" id="cc-slots-bar" style="width:0%"></div></div></div>
+          <div><div class="bar-row"><span>Their memory (RAM)</span><span class="muted" id="cc-mem-text">&ndash;</span></div>
+            <div class="st-progress"><div class="st-progress__bar" id="cc-mem-bar" style="width:0%"></div></div></div>
+        </div>
+        <dl class="facts" id="cc-facts"></dl>
+        <p class="muted small cc-note" id="cc-note"></p>
+      </div>
+
+      <div class="st-card mcp-card" id="mcp-card" hidden>
+        <div class="req-head"><span class="card-title">MCP servers</span><span class="muted small" id="mcp-sum"></span></div>
+        <div class="mcp-list" id="mcp-list"></div>
+        <p class="muted small mcp-note">Their tools run on this PC with your rights, when the model decides to call them
+          (in this page's chat only; switch it off in Sampling). Each switch turns that server off without reloading the model.</p>
+      </div>
+
+      <div class="st-card assist-card" id="assist-card" hidden>
+        <div class="req-head"><span class="card-title">External assistants</span><span class="muted small" id="assist-sum"></span></div>
+        <dl class="facts" id="assist-facts"></dl>
+        <div class="assist-calls" id="assist-calls"></div>
+        <p class="muted small assist-note">Every Assist request and every "Check lag" probe is written to a small log so
+          this card can show what was sent and what came back. The models that were timed but not pinned are listed
+          with their lag, which is why a model can be on the endpoint and still absent from the dropdown.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ About ============================ -->
+  <section class="view view--about" id="view-about" role="tabpanel" aria-labelledby="tab-btn-about" hidden>
+    <div class="about">
+      <div class="st-card">
+        <span class="card-title">Model and engine</span>
+        <dl class="facts" id="facts-engine"></dl>
+      </div>
+      <div class="st-card">
+        <span class="card-title">This PC</span>
+        <dl class="facts" id="facts-hw"></dl>
+      </div>
+      <div class="st-card">
+        <span class="card-title">Connect your tools</span>
+        <p class="muted">Any OpenAI- or Anthropic-compatible client works with these addresses.</p>
+        <dl class="facts" id="facts-api"></dl>
+      </div>
+      <div class="st-card">
+        <span class="card-title">Settings</span>
+        <div class="st-field">
+          <label class="st-label" for="api-key">API key <output>only if the server was started with one</output></label>
+          <input class="st-input" id="api-key" type="password" autocomplete="off" placeholder="Not needed">
+        </div>
+        <div class="toggle-row"><span>Dark theme</span>
+          <button class="st-toggle" id="dark-toggle" role="switch" aria-checked="false" aria-label="Dark theme"></button></div>
+        <p class="muted small">Chats, settings and the key are kept in this browser only.
+          <a href="https://github.com/hypercoreiai/HyperCore" target="_blank" rel="noopener noreferrer">HyperCore on GitHub</a></p>
+      </div>
+      <div class="st-card cfg-card" id="cfg-card" hidden>
+        <div class="req-head"><span class="card-title">Model settings</span><span class="muted small" id="cfg-file"></span></div>
+        <p class="muted small">Kept in the model's run config for every client. An empty field is the default. They
+          take effect the next time the model starts (close HyperCore's window and start it again).</p>
+        <form class="cfg-form" id="cfg-form"></form>
+        <div class="cfg-actions"><button class="st-btn st-btn--primary" id="cfg-save" type="button">Save</button>
+          <span class="muted small" id="cfg-msg" role="status"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ Assist ============================ -->
+  <section class="view view--assist" id="view-assist" role="tabpanel" aria-labelledby="tab-btn-assist" hidden>
+    <div class="chat-scroll" id="assist-scroll">
+      <div class="chat" id="assist-chat">
+        <div class="chat-empty" id="assist-empty">
+          <div class="chat-empty__title">Assist</div>
+          <div class="chat-empty__sub">Talk to external assistants through the MCP bridge. The cached NVIDIA endpoint is used with the OpenAI Chat Completions interface; the selected model name is sent with the request.</div>
+        </div>
+      </div>
+    </div>
+    <div class="composer-wrap">
+      <!-- The model picker folds exactly like the thought box: one <details>, a summary that says
+           which model is answering so the panel can be closed without losing that, and the body
+           holding the select, the endpoint status and the buttons. The open state is remembered. -->
+      <details class="st-collapse assist-top" id="assist-top" open>
+        <summary><svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-experts"/></svg>
+          <span class="assist-top__title">Assistant models</span>
+          <span class="muted small assist-top__pick" id="assist-top-pick" role="status">no model selected</span>
+          <svg class="st-icon st-icon--sm st-chev"><use href="web/sprite.svg#i-chevron"/></svg></summary>
+        <div class="st-collapse__body assist-top__body">
+          <label class="st-label" for="assist-model">External assistant</label>
+          <select class="st-input assist-model" id="assist-model" aria-label="External assistant model"></select>
+          <span class="muted small assist-status" id="assist-status" role="status">Loading cached NVIDIA endpoint…</span>
+          <button class="st-btn st-btn--secondary" id="assist-probe" type="button">Check lag</button>
+          <button class="st-btn st-btn--secondary" id="assist-all" type="button">Show every model</button>
+          <button class="st-btn st-btn--secondary" id="assist-clear" type="button">Clear</button>
+          <details class="assist-probe" id="assist-probe-results" hidden>
+            <summary>Probe results</summary>
+            <div class="assist-probe__body" id="assist-probe-body"></div>
+          </details>
+        </div>
+      </details>
+      <form class="st-composer" id="assist-composer">
+        <textarea id="assist-input" rows="2" placeholder="Ask an external assistant..." aria-label="Message to external assistant"></textarea>
+        <div class="st-composer__bar">
+          <span class="muted small">Endpoint/key are cached in .env; model name is passed to the OpenAI-compatible API.</span>
+          <span class="spacer"></span>
+          <button class="st-btn st-btn--primary" id="assist-send" type="submit">Send</button>
+        </div>
+      </form>
+    </div>
+  </section>
+  <!-- ============================ Tune ============================ -->
+  <section class="view view--tune" id="view-tune" role="tabpanel" aria-labelledby="tab-btn-tune" hidden>
+    <p class="tune-note" id="tune-note">Do not close this page while a tune is running. Results are
+      reported on completion.</p>
+
+    <div class="st-card tune-form">
+      <span class="card-title">Sweep</span>
+      <div class="tune-grid">
+        <label>Model<input id="tune-model" type="text" value="q2_0"></label>
+        <label>Objective<select id="tune-objective">
+          <option value="gen">Generation tok/s</option>
+          <option value="prefill">Prefill tok/s</option>
+          <option value="latency">Latency</option>
+          <option value="balance">Balance</option>
+        </select></label>
+        <label>Context<input id="tune-context" type="number" value="131072"></label>
+        <label>Trials<input id="tune-trials" type="number" value="30"></label>
+        <label>Sampler<select id="tune-sampler">
+          <option value="tpe">TPE</option><option value="gp">GP (needs torch)</option><option value="random">Random</option>
+        </select></label>
+        <label>Mode<select id="tune-mode">
+          <option value="joint">Joint</option><option value="staged">Staged</option>
+        </select></label>
+        <label>VRAM min<input id="tune-vram-min" type="number" value="256"></label>
+        <label>VRAM max<input id="tune-vram-max" type="number" value="1536"></label>
+        <label>PCIe max<input id="tune-pcie" type="number" step="0.05" value="1.0"></label>
+      </div>
+      <div class="tune-pins">
+        <span class="muted small">Pin a dimension so the sweep searches around it:</span>
+        <div id="tune-pins"></div>
+      </div>
+      <div class="tune-actions">
+        <button class="st-btn st-btn--primary" id="tune-run" type="button">Run sweep</button>
+        <button class="st-btn" id="tune-stop" type="button" disabled>Stop</button>
+        <label class="muted small"><input id="tune-benchmark" type="checkbox"> Benchmark the winner</label>
+      </div>
+    </div>
+
+    <div class="st-card tune-progress" hidden>
+      <span class="card-title">Progress</span>
+      <div class="tune-bar"><div id="tune-bar-fill"></div></div>
+      <span class="muted small" id="tune-meta"></span>
+    </div>
+
+    <div class="st-card tune-results" hidden>
+      <span class="card-title">Results</span>
+      <div class="tune-best" id="tune-best"></div>
+      <table class="tune-table" id="tune-table">
+        <thead><tr><th>#</th><th>layer</th><th>vram</th><th>pcie</th><th>ple-io</th><th>kv</th>
+          <th>kvgrow</th><th>hostcore</th><th>affinity</th><th>worker</th><th>tail</th>
+          <th>draft</th><th>status</th><th>gen</th><th>prefill</th><th>latency</th></tr></thead>
+        <tbody id="tune-rows"></tbody>
+      </table>
+      <div class="tune-export" id="tune-export"></div>
+    </div>
+  </section>
+
+  <!-- ============================ Build ============================ -->
+  <section class="view view--build" id="view-build" role="tabpanel" aria-labelledby="tab-btn-build" hidden>
+    <div class="st-card build-status">
+      <span class="card-title">Engine</span>
+      <dl class="facts" id="build-installed"></dl>
+      <p class="muted small" id="build-update-note"></p>
+    </div>
+
+    <div class="st-card build-releases">
+      <span class="card-title">Available releases</span>
+      <select id="build-tag"></select>
+      <div class="build-actions">
+        <button class="st-btn st-btn--primary" id="build-fetch" type="button">Install ready-made engine</button>
+        <button class="st-btn" id="build-start" type="button">Clone and build from source</button>
+      </div>
+      <p class="muted small">The ready-made engine is a prebuilt archive for this operating system.
+        Building from source takes 10-20 minutes and lets you choose the options below.</p>
+    </div>
+
+    <div class="st-card build-options">
+      <span class="card-title">Build options</span>
+      <p class="muted small">Read from the cloned release's CMakeLists.txt and setup.py, not from a list
+        we maintain. A new release's new options appear here automatically.</p>
+      <div id="build-options-grid"></div>
+      <div id="build-changes" hidden></div>
+    </div>
+
+    <div class="st-card build-log" hidden>
+      <span class="card-title">Build log</span>
+      <pre id="build-log"></pre>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============================ Sampling drawer ============================ -->
+<aside class="st-drawer" id="drawer" data-open="false" aria-label="Sampling and thinking" aria-hidden="true">
+  <div class="st-drawer__head"><span class="card-title">Sampling</span>
+    <button class="st-btn st-btn--icon" id="drawer-close" aria-label="Close">
+      <svg class="st-icon"><use href="web/sprite.svg#i-chevron"/></svg></button></div>
+  <div class="st-drawer__body">
+    <div class="st-field">
+      <label class="st-label" for="s-thinking">Thinking <output id="o-thinking"></output></label>
+      <div class="seg" id="s-thinking" role="radiogroup" aria-label="Thinking">
+        <button type="button" role="radio" data-v="none">Off</button><button type="button" role="radio" data-v="low">Low</button>
+        <button type="button" role="radio" data-v="medium">Medium</button><button type="button" role="radio" data-v="high">High</button>
+      </div>
+    </div>
+    <div class="st-field">
+      <label class="st-label" for="s-temp">Temperature <output id="o-temp"></output></label>
+      <input class="st-slider" type="range" id="s-temp" min="0" max="1.5" step="0.05">
+      <span class="muted small">0 = always the most likely word (exact, repeatable)</span>
+    </div>
+    <div class="st-field">
+      <label class="st-label" for="s-topp">Top-p <output id="o-topp"></output></label>
+      <input class="st-slider" type="range" id="s-topp" min="0.05" max="1" step="0.05">
+    </div>
+    <div class="st-field">
+      <label class="st-label" for="s-topk">Top-k <output id="o-topk"></output></label>
+      <input class="st-slider" type="range" id="s-topk" min="1" max="64" step="1">
+    </div>
+    <div class="st-field">
+      <label class="st-label" for="s-max">Max tokens <output>empty = until done</output></label>
+      <input class="st-input" id="s-max" type="number" min="1" step="1" placeholder="Until done">
+    </div>
+    <div class="st-field">
+      <label class="st-label" for="s-ctx">Context cap <output id="o-ctx"></output></label>
+      <input class="st-input" id="s-ctx" type="number" min="0" step="1000" placeholder="No cap">
+    </div>
+    <div class="st-field">
+      <label class="st-label" for="s-seed">Seed <output>empty = random</output></label>
+      <input class="st-input" id="s-seed" type="number" min="1" step="1" placeholder="Random">
+    </div>
+    <div class="st-field">
+      <label class="st-label" for="s-surface">Surface <output id="o-surface"></output></label>
+      <input class="st-slider st-slider--metal" type="range" id="s-surface" min="0" max="100" step="1" value="0"
+             aria-label="Background surface, from white to onyx black">
+      <span class="muted small">white &rarr; polished chrome &rarr; brushed silver &rarr; matte onyx. Kept in this browser.</span>
+    </div>
+    <div class="toggle-row"><span>Show thinking<br><span class="muted small">expanded while it streams</span></span>
+      <button class="st-toggle" id="s-show" role="switch" aria-checked="true" aria-label="Show thinking"></button></div>
+    <div class="toggle-row" id="mcp-row" hidden><span>Use tools from MCP servers<br><span class="muted small"
+      id="mcp-row-sub">the model may call them while it answers</span></span>
+      <button class="st-toggle" id="s-mcp" role="switch" aria-checked="true" aria-label="Use tools from MCP servers"></button></div>
+    <div class="toggle-row" id="esp-row" hidden><span>Experimental speed projection<br><span class="muted small">the
+      engine's control vector; off = the stock model. Switching reads the chat again once</span></span>
+      <button class="st-toggle" id="s-esp" role="switch" aria-checked="true" aria-label="Experimental speed projection"></button></div>
+    <div class="toggle-row"><span>Use for other apps too<br><span class="muted small">omp and other API clients get
+      these settings for anything they don't set themselves</span></span>
+      <button class="st-toggle" id="s-share" role="switch" aria-checked="false" aria-label="Use for other apps too"></button></div>
+    <div class="drawer-actions">
+      <button class="st-btn st-btn--secondary" id="s-reset" type="button">Reset</button>
+      <button class="st-btn st-btn--primary" id="s-apply" type="button">Apply</button>
+    </div>
+  </div>
+</aside>
+<div class="scrim" id="scrim" hidden></div>
+<div class="st-toasts" id="toasts" aria-live="polite"></div>
+<script src="web/app.js"></script>
+</body>
+</html>

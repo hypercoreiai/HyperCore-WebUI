@@ -1,0 +1,5 @@
+def a():
+    return guard(1)
+
+def b():
+    return guard(1)

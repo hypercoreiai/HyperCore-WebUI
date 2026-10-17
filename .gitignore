@@ -1,0 +1,22 @@
+# Engine binaries and the scratch clone are never committed.
+engine/*
+!engine/.gitkeep
+tmp/
+logs/
+data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Tuning output and machine-specific history stay on the box that produced them.
+optuna_tune/results/
+optuna_tune/history/
+
+# Local run configs and the API key.
+config/run-*.json
+config/run-*.sh
+.env

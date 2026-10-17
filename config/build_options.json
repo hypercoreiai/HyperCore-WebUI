@@ -1,0 +1,570 @@
+{
+  "source": "/home/ai-user0/Strata",
+  "project": "strata",
+  "version": "0.1.40",
+  "cmake_options": [
+    {
+      "name": "STRATA_BUILD_CONVERSATION_TESTS",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build standalone conversation cache tests",
+      "visible": false
+    },
+    {
+      "name": "STRATA_BUILD_TESTS",
+      "kind": "string",
+      "default": "${_strata_tests_default}",
+      "help": "Build the test suite",
+      "visible": false
+    },
+    {
+      "name": "STRATA_ENABLE_CUDA",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the CUDA targets (Phase 2+)",
+      "visible": true
+    },
+    {
+      "name": "STRATA_ENABLE_HIP",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the HIP targets for wave32 AMD GPUs (gfx1100, gfx1201; gfx1012/gfx1030 unvalidated)",
+      "visible": true
+    },
+    {
+      "name": "STRATA_ENABLE_SYCL",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "EXPERIMENTAL: build the Intel Arc (SYCL) engine from sycl/ - docs/INTEL_ARC.md",
+      "visible": true
+    },
+    {
+      "name": "STRATA_EXPERIMENTAL_SM60",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "community build for GPUs below compute capability 7.5: Pascal sm_60, Volta sm_70 (#236)",
+      "visible": false
+    },
+    {
+      "name": "STRATA_GGML_DIR",
+      "kind": "int",
+      "default": "",
+      "help": "llama.cpp checkout to take ggml from (empty: fetch the pinned commit)",
+      "visible": false
+    },
+    {
+      "name": "STRATA_HIP_GFX906",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the CUDA targets for AMD gfx906 through HIP (wave64 compat layer)",
+      "visible": true
+    },
+    {
+      "name": "STRATA_ISA_FLOOR",
+      "kind": "string",
+      "default": "",
+      "help": "experimental older-CPU build: empty (default, AVX2 floor), avx, or none (SSE4.2)",
+      "visible": true
+    },
+    {
+      "name": "STRATA_MMQ_KQUANTS",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the MMQ prompt kernels for Q4_K / Q5_K / Q5_1 / Q6_K: the CUDA experts of Unsloth's UD-Q4_K_XL, and on HIP the dense GGUF projections (STRATA_DENSE_MMQ)",
+      "visible": true
+    },
+    {
+      "name": "STRATA_NATIVE_EXPERTS",
+      "kind": "bool",
+      "default": "ON",
+      "help": "Native (IQ) expert support through ggml-cpu",
+      "visible": true
+    },
+    {
+      "name": "STRATA_ORACLE_BUILD_DIR",
+      "kind": "int",
+      "default": "",
+      "help": "Matching existing shared llama.cpp build",
+      "visible": false
+    },
+    {
+      "name": "STRATA_ORACLE_SOURCE_DIR",
+      "kind": "int",
+      "default": "",
+      "help": "Pinned llama.cpp source for independent CUDA parity tests",
+      "visible": false
+    },
+    {
+      "name": "STRATA_ORCA_Q4KS_MMQ",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the GGML Q5_0 MMQ instance for OrcaRouter Q4_K_S",
+      "visible": false
+    },
+    {
+      "name": "STRATA_PLE_FIXTURE_DIR",
+      "kind": "int",
+      "default": "${CMAKE_CURRENT_SOURCE_DIR}/bench/micro",
+      "help": "Directory containing required ple_in.bin and ple_out.bin parity fixtures",
+      "visible": false
+    },
+    {
+      "name": "STRATA_PORTABLE",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "build for other PCs: AVX2 baseline, static MSVC runtime",
+      "visible": true
+    },
+    {
+      "name": "STRATA_PREFILL_MMQ",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the optional GGML MMQ prefill path for HIP",
+      "visible": true
+    },
+    {
+      "name": "STRATA_Q6K_EXPERTS",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the Q6_K gate/up grouped expert kernels (UD-Q6_K_XL)",
+      "visible": true
+    },
+    {
+      "name": "STRATA_WERROR",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Treat compiler warnings as errors",
+      "visible": false
+    }
+  ],
+  "setup_choices": [
+    {
+      "flag": "--family",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--model",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--context",
+      "choices": null,
+      "type": "int",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--rope-scaling",
+      "choices": [
+        "none",
+        "linear",
+        "yarn"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--rope-scale",
+      "choices": null,
+      "type": "float",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--kv",
+      "choices": [
+        "int8",
+        "q4_0",
+        "k8v4"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--vision",
+      "choices": [
+        "yes",
+        "no",
+        "none",
+        "gpu",
+        "cpu"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--vision-tokens",
+      "choices": null,
+      "type": "int",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--experimental-speed-projection",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--port",
+      "choices": null,
+      "type": "int",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--gpu",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--gpus",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--layer-split",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--no-remote-expert-opt",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--host",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--api-key",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--no-browser",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--browser",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--data-dir",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--models-dir",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--gguf-dir",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--yes",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--setup",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--no-start",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--update",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--rollback-engine",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--build",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--cuda",
+      "choices": [
+        "12",
+        "13",
+        "auto"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--prebuilt",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--check",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--calibrate",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--draft-vocab",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--low-ram",
+      "choices": [
+        "auto",
+        "on",
+        "off",
+        "resident",
+        "mmap"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--resident-budget-gib",
+      "choices": null,
+      "type": "float",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--vram-reserve-mib",
+      "choices": null,
+      "type": "int",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--parallel",
+      "choices": null,
+      "type": "int",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--kv-streaming",
+      "choices": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--backend",
+      "choices": [
+        "cuda",
+        "hip",
+        "sycl"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--skip-build",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    }
+  ],
+  "targets": [
+    "arch_defaults_test",
+    "bf16_bits_test",
+    "bf16_gemv_parity",
+    "controller_test",
+    "conv_cache_test",
+    "conversation_cache_test",
+    "conversation_file_test",
+    "conversation_memory_test",
+    "conversation_snapshot_test",
+    "conversation_split_failure_test",
+    "conversation_transfer_test",
+    "conversation_validation_test",
+    "coupled_draft_test",
+    "cvec_parity",
+    "decode_cluster_parity",
+    "dequant_bf16_test",
+    "dequant_q5_1_test",
+    "dequant_s2_parity",
+    "direct_file_async_test",
+    "dma_batch_parity",
+    "draft_policy_test",
+    "elementwise_parity",
+    "exchange_storage_test",
+    "expert_cache_per_layer_test",
+    "expert_cache_segmented_test",
+    "expert_layout_test",
+    "expert_multi_test",
+    "expert_parity",
+    "expert_profile_save_test",
+    "file_expert_source_test",
+    "fused_gr_bench",
+    "gdn_parity",
+    "gdn_rec_parity",
+    "gemm_bf16_parity",
+    "gguf_reader_test",
+    "gguf_split_test",
+    "gr_multi_parity",
+    "gr_parity",
+    "graph_registry_test",
+    "hip_expert_cache_staging",
+    "hip_gdn_rec_head",
+    "hip_gemm_f16_io_parity",
+    "hip_handoff",
+    "hip_intrinsics",
+    "hip_mapped_alias",
+    "hip_native_qsa_score",
+    "hip_ple_iq4",
+    "hip_prefill_fused_iq",
+    "hip_prefill_fused_moe",
+    "hip_prefill_gemm",
+    "hip_prefill_hcd_exact_parity",
+    "hip_prefill_hipblaslt_gemm",
+    "hip_prefill_mmq_parity",
+    "hip_prefill_native_batch",
+    "hip_prefill_wmma_gemm_parity",
+    "hip_prompt_attn_wmma",
+    "hip_q2_zero",
+    "hip_router_fast",
+    "hit_cpu_order_parity",
+    "iq_avx2_parity",
+    "iq_multi_parity",
+    "iq_parity",
+    "kv_hybrid_parity",
+    "kv_q4_parity",
+    "kv_q8_parity",
+    "kv_steps_parity",
+    "kv_stream_parity",
+    "message_boundary_test",
+    "mmvq_multi_parity",
+    "native_dense_ple_key_test",
+    "native_expert_bench",
+    "native_expert_parity",
+    "native_grouped_parity",
+    "native_mmvq_multi",
+    "native_multi_parity",
+    "pinned_capture",
+    "pinned_shared_test",
+    "platform_memory_test",
+    "ple_fp8_parity",
+    "ple_parity",
+    "ple_q5_parity",
+    "ple_reader_test",
+    "pool_affinity_test",
+    "pool_stress",
+    "pool_test",
+    "prefill_fused_iq_test",
+    "prefill_fused_moe_test",
+    "prefill_mmq_kquant_test",
+    "q2_bitplane_parity",
+    "q5_projection_parity",
+    "qsa_parity",
+    "qsa_prompt_attn_parity",
+    "qsa_select_bench",
+    "qsa_topk_active_parity",
+    "qsa_topk_parity",
+    "quantize_act_parity",
+    "resident_plan_parity",
+    "rope_parity",
+    "route_window_parity",
+    "router_dot_parity",
+    "router_top10_parity",
+    "s2_expert_grouped_parity",
+    "s2_gemv_parity",
+    "s2_gemv_q8_parity",
+    "s_gemv_parity",
+    "s_gemv_q8k_parity",
+    "sampler_parity",
+    "shared_expert_parity",
+    "strata",
+    "strata-concurrent",
+    "strata-dequant",
+    "strata-device",
+    "strata-gguf",
+    "strata-load",
+    "strata-overlap",
+    "strata-plan",
+    "suffix_drafter_test",
+    "tune_hipblaslt",
+    "tuning_header_arch_family_test",
+    "verify_parity",
+    "vmm_test"
+  ]
+}

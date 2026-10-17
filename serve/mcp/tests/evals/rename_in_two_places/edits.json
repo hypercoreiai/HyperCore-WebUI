@@ -1,0 +1,12 @@
+[
+  {
+    "old_text": "    return 1",
+    "new_text": "    return guard(1)",
+    "line": 2
+  },
+  {
+    "old_text": "    return 1",
+    "new_text": "    return guard(1)",
+    "line": 5
+  }
+]

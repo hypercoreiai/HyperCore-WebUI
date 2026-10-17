@@ -1,0 +1,7 @@
+[
+  {
+    "old_text": "    return data",
+    "new_text": "    if not data:\n        return \"\"\n    return data",
+    "line": 3
+  }
+]

@@ -1,0 +1,664 @@
+{
+ "updated": "2026-10-10T11:16:33+0000",
+ "endpoint": "https://integrate.api.nvidia.com/v1",
+ "max_lag_s": 1.0,
+ "rounds": 2,
+ "models": [
+  {
+   "id": "openai/gpt-oss-20b",
+   "ttft_s": 0.228,
+   "best_s": 0.202,
+   "worst_s": 0.278,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "poolside/laguna-xs-2.1",
+   "ttft_s": 0.232,
+   "best_s": 0.175,
+   "worst_s": 0.245,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+   "ttft_s": 0.238,
+   "best_s": 0.214,
+   "worst_s": 0.253,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "nvidia/nemotron-3.5-content-safety",
+   "ttft_s": 0.26,
+   "best_s": 0.217,
+   "worst_s": 0.312,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "nvidia/nemotron-parse-2.0",
+   "ttft_s": 0.27,
+   "best_s": 0.266,
+   "worst_s": 0.275,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "meta/llama-3.2-11b-vision-instruct",
+   "ttft_s": 0.299,
+   "best_s": 0.29,
+   "worst_s": 0.394,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+   "ttft_s": 0.409,
+   "best_s": 0.24,
+   "worst_s": 2.925,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "nvidia/nemotron-3-super-120b-a12b",
+   "ttft_s": 0.43,
+   "best_s": 0.402,
+   "worst_s": 0.545,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "z-ai/glm-5.3-flash",
+   "ttft_s": 0.437,
+   "best_s": 0.405,
+   "worst_s": 0.87,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "z-ai/glm-5.3",
+   "ttft_s": 0.466,
+   "best_s": 0.328,
+   "worst_s": 0.619,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "meta/muse-glimmer-30b",
+   "ttft_s": 0.527,
+   "best_s": 0.4,
+   "worst_s": 0.676,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "google/diffusiongemma-26b-a4b-it",
+   "ttft_s": 0.616,
+   "best_s": 0.575,
+   "worst_s": 0.789,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "nvidia/ising-calibration-1.5-31b",
+   "ttft_s": 0.877,
+   "best_s": 0.535,
+   "worst_s": 1.223,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  },
+  {
+   "id": "moonshotai/kimi-k3",
+   "ttft_s": 0.939,
+   "best_s": 0.478,
+   "worst_s": 1.065,
+   "ok": true,
+   "error": null,
+   "reason": "measured"
+  }
+ ],
+ "over_limit": [
+  {
+   "id": "nvidia/nemotron-3-ultra-550b-a55b",
+   "ttft_s": 2.778,
+   "worst_s": 5.793,
+   "ok": true,
+   "error": null,
+   "reason": "over the limit"
+  },
+  {
+   "id": "nvidia/riva-translate-4b-instruct-v2",
+   "ttft_s": 6.472,
+   "worst_s": 7.599,
+   "ok": true,
+   "error": null,
+   "reason": "over the limit"
+  },
+  {
+   "id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+   "ttft_s": 7.342,
+   "worst_s": 11.153,
+   "ok": true,
+   "error": null,
+   "reason": "over the limit"
+  },
+  {
+   "id": "bigcode/starcoder2-15b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "ai21labs/jamba-1.5-large-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "adept/fuyu-8b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "databricks/dbrx-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "deepseek-ai/deepseek-coder-6.7b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "aisingapore/sea-lion-7b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "01-ai/yi-large",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/codegemma-1.1-7b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/gemma-3-12b-it",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/gemma-3-4b-it",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/codegemma-7b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/deplot",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/gemma-2b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/recurrentgemma-2b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "ibm/granite-34b-code-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "ibm/granite-3.0-3b-a800m-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "ibm/granite-3.0-8b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "ibm/granite-8b-code-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "meta/codellama-70b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "meta/llama2-70b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "microsoft/kosmos-2",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "microsoft/phi-3-vision-128k-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "microsoft/phi-3.5-moe-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "mistralai/codestral-22b-instruct-v0.1",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "mistralai/mistral-7b-instruct-v0.3",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "mistralai/mistral-large",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "mistralai/mixtral-8x22b-v0.1",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "mistralai/mistral-large-2-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "moonshotai/kimi-k2.6",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nv-mistralai/mistral-nemo-12b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/cosmos-reason2-8b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/embed-qa-4",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama-3.1-nemoguard-8b-topic-control",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "the model returned an empty response",
+   "reason": "probe failed"
+  },
+  {
+   "id": "nvidia/llama-3.1-nemotron-51b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama-3.2-nv-embedqa-1b-v1",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama-nemotron-embed-vl-1b-v2",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama3-chatqa-1.5-70b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/nemotron-3-embed-1b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/ai-synthetic-video-detector",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 500",
+   "reason": "rate limited"
+  },
+  {
+   "id": "deepseek-ai/deepseek-v4.1-flash",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "The read operation timed out",
+   "reason": "timed out"
+  },
+  {
+   "id": "nvidia/nemotron-4-340b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "google/gemma-4-31b-it",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "The read operation timed out",
+   "reason": "timed out"
+  },
+  {
+   "id": "nvidia/nemotron-4-340b-reward",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/nemotron-nano-3-30b-a3b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "meta/llama-3.2-90b-vision-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "The read operation timed out",
+   "reason": "timed out"
+  },
+  {
+   "id": "nvidia/nemotron-parse",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 400",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/neva-22b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/nv-embedqa-mistral-7b-v2",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/nvclip",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "meta/llama-guard-4-12b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "The read operation timed out",
+   "reason": "timed out"
+  },
+  {
+   "id": "nvidia/riva-translate-4b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/vila",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "snowflake/arctic-embed-l",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "writer/palmyra-creative-122b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "writer/palmyra-fin-70b-32k",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "writer/palmyra-med-70b",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "writer/palmyra-med-70b-32k",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "zyphra/zamba2-7b-instruct",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "HTTP 404",
+   "reason": "not available"
+  },
+  {
+   "id": "nvidia/llama-3.1-nemoguard-8b-content-safety",
+   "ttft_s": null,
+   "worst_s": null,
+   "ok": false,
+   "error": "The read operation timed out",
+   "reason": "timed out"
+  }
+ ]
+}

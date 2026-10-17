@@ -1,0 +1,4 @@
+servers:
+  docs:
+    command: python3
+    timeout_s: 30

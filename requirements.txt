@@ -1,0 +1,17 @@
+# The WebUI itself needs only these.
+jinja2>=3.1
+requests>=2.31
+psutil>=5.9
+pillow>=10
+pyyaml>=6.0
+regex
+numpy
+tqdm
+
+# Build tab: cmake and ninja are used to compile a Strata release.
+cmake
+ninja
+
+# Tune tab (optional): install these to run a sweep.
+# optuna
+# torch        # only for --sampler gp

@@ -1,0 +1,26 @@
+services:
+  web-scrape-mcp:
+    build: .
+    image: web-scrape-mcp:local
+    container_name: web-scrape-mcp
+    restart: unless-stopped
+    ports:
+      - "8766:8766"
+    volumes:
+      - /mnt/anythingllm_shared:/data/downloads
+    environment:
+      MCP_ALLOWED_DIR: /data/downloads
+      MCP_MAX_FILE_SIZE_MB: "500"
+      MCP_TIMEOUT_SEC: "30"
+      MCP_CONCURRENT: "3"
+      MCP_BLOCK_PRIVATE_IPS: "true"
+      MCP_SSL_VERIFY: "true"
+      MCP_HTTP_HOST: 0.0.0.0
+      MCP_HTTP_PORT: "8766"
+      MCP_LOG_LEVEL: info
+    networks:
+      - ai-bridge
+
+networks:
+  ai-bridge:
+    external: true

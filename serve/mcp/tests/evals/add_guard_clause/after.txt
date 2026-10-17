@@ -1,0 +1,5 @@
+def read(path):
+    data = open(path).read()
+    if not data:
+        return ""
+    return data

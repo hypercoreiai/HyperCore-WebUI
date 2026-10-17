@@ -1,0 +1,4 @@
+class Hub:
+    def start(self):
+        self.ready = True
+        self.started = time.time()

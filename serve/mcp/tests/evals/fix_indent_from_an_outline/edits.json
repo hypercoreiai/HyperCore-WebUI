@@ -1,0 +1,6 @@
+[
+  {
+    "old_text": "        self.ready = True",
+    "new_text": "        self.ready = True\n        self.started = time.time()"
+  }
+]
