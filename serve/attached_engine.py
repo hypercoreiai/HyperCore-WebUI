@@ -23,6 +23,7 @@ so, and the Monitor names the engine's address instead of pretending to control 
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -31,6 +32,11 @@ from collections.abc import Iterator
 
 HEALTH_PATHS = ("/health", "/api/health")
 FIRST_TOKEN_TIMEOUT_S = 600.0
+# The text we send is re-rendered by the other server's chat template, so the prompt the
+# engine counts is a little longer than the ids we were given. A tool turn is where this
+# bites: the tool definitions alone are thousands of tokens, and a request that asks for
+# the whole remaining context is then refused with 400 before a token is generated.
+TEMPLATE_SLACK = 512
 
 
 class AttachedEngineError(RuntimeError):
@@ -75,10 +81,34 @@ class AttachedEngine:
         )
         return urllib.request.urlopen(req, timeout=timeout or self.timeout_s)
 
+    def _send(self, body: dict):
+        """POST a chat request, fitting max_tokens to the room the engine says is left.
+
+        The first attempt is sent as asked. A 400 that names the largest max_tokens that
+        would fit is retried once with it: the engine's own count is the only accurate one,
+        since it includes its chat template and any tool block it renders itself.
+        """
+        for attempt in range(2):
+            try:
+                return self._request("/v1/chat/completions", body)
+            except urllib.error.HTTPError as exc:
+                detail = _body_text(exc)
+                fit = _fits_max_tokens(detail)
+                if exc.code != 400 or fit is None or fit < 1 or body.get("max_tokens") <= fit:
+                    raise AttachedEngineError(
+                        f"the attached engine refused the request ({exc.code}): {detail}") from None
+                body["max_tokens"] = fit
+            except (urllib.error.URLError, OSError) as exc:
+                raise AttachedEngineError(f"the attached engine refused the request: {exc}") from None
+        raise AttachedEngineError("the attached engine refused the request twice")
+
     def _json(self, path: str, body: dict | None = None, timeout: float = 10.0) -> dict:
         try:
             with self._request(path, body, timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace") or "{}")
+        except urllib.error.HTTPError as exc:
+            raise AttachedEngineError(
+                f"the engine at {self.base} answered {exc.code} on {path}: {_body_text(exc)}") from None
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise AttachedEngineError(f"the engine at {self.base} did not answer: {exc}") from None
 
@@ -183,10 +213,10 @@ class AttachedEngine:
             body = {"messages": [{"role": "user", "content": self._text(ids)}],
                     "max_tokens": int(max_new), "stream": True,
                     **_openai_sampling(sampling or {})}
-            try:
-                resp = self._request("/v1/chat/completions", body)
-            except (urllib.error.URLError, OSError) as exc:
-                raise AttachedEngineError(f"the attached engine refused the request: {exc}") from None
+            if self.max_context:
+                body["max_tokens"] = max(1, min(int(max_new),
+                                               self.max_context - len(ids) - TEMPLATE_SLACK))
+            resp = self._send(body)
 
             started = time.perf_counter()
             generated = 0
@@ -235,6 +265,35 @@ class AttachedEngine:
         if self.tokenizer is not None:
             return self.tokenizer.decode(list(ids))
         return " ".join(str(int(i)) for i in ids)
+
+
+def _fits_max_tokens(detail: str) -> int | None:
+    """The max_tokens a refusal says would fit, from text like 'at most 255930 here'."""
+    for pattern in (r"at most (\d+)", r"max_tokens \(at most (\d+)\)", r"room left: (\d+)"):
+        m = re.search(pattern, detail)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _body_text(exc: urllib.error.HTTPError) -> str:
+    """The engine's own reason for a 4xx, which is the only part of a refusal that can be
+    acted on: 'no room in the context' and 'bad model name' look the same from the status.
+    """
+    try:
+        text = exc.read().decode("utf-8", "replace").strip()
+    except Exception:  # noqa: BLE001 - the body may already be consumed
+        text = ""
+    if not text:
+        return exc.reason or "no reason given"
+    try:
+        data = json.loads(text)
+        message = (data.get("error") or {}).get("message") if isinstance(data, dict) else None
+        if message:
+            text = str(message)
+    except ValueError:
+        pass
+    return text[:600]
 
 
 def _openai_sampling(sampling: dict) -> dict:
