@@ -3800,7 +3800,21 @@ def make_handler(svc: Service):
                     self._json(200, {"models": tune_api.available_models(),
                                      "objectives": list(tune_api.OBJECTIVES),
                                      "pinable": list(tune_api.PINABLE),
+                                     "pin_options": tune_api.pin_options(),
+                                     "priors": tune_api.priors(),
                                      "records": tune_api.records()})
+                return
+            if path == "/tune/results":
+                # the finished sweep: the winner, its benchmark, and the files it wrote
+                if self._authorized():
+                    model = parse_qs(urlsplit(self.path).query).get("model", [""])[0]
+                    self._json(200, {"model": model, "job": tune_api.JOB.status(),
+                                     "deliverables": tune_api.deliverables(model)})
+                return
+            if path == "/build/options":
+                if self._authorized():
+                    self._json(200, json.loads(build_api.MANIFEST.read_text(encoding="utf-8"))
+                              if build_api.MANIFEST.is_file() else {"cmake_options": []})
                 return
             if path == "" or (path == "/api-monitor" and svc.api_monitor):
                 body = (ROOT / "serve" / "web" / ("monitor.html" if path else "index.html")).read_bytes()
@@ -4004,16 +4018,66 @@ def make_handler(svc: Service):
                 if path == "/build/log":
                     self._json(200, build_api.JOB.status())
                     return
-                if path == "/tune/run":
-                    # a sweep needs the GPU to itself: unload the chat engine first
+                if path == "/build/cancel":
+                    self._json(200, build_api.JOB.cancel())
+                    return
+                if path == "/build/apply":
+                    # the new binary is already in engine/: restart the engine on it
+                    if getattr(svc.engine, "attached", False):
+                        # We do not own this engine: the binary is in engine/, but the
+                        # server that started it is the one that has to run it.
+                        self._json(200, {
+                            "ok": False,
+                            "attached": True,
+                            "installed": build_api.installed_version(),
+                            "note": "the new binary is in engine/. This server is attached to "
+                                   "an engine it did not start: restart that server to run it.",
+                        })
+                        return
+                    if not hasattr(svc.engine, "restart"):
+                        self._json(400, {"error": {"message": "this server has no engine to restart"}})
+                        return
+                    ok = False
                     try:
-                        svc.engine.stop() if hasattr(svc.engine, "stop") else None
+                        ok = bool(svc.engine.restart())
+                    except Exception as exc:  # noqa: BLE001 - the engine may need a new config
+                        self._json(500, {"error": {"message": f"the engine did not restart: {exc}"}})
+                        return
+                    self._json(200 if ok else 500, {
+                        "ok": ok,
+                        "installed": build_api.installed_version(),
+                        "note": "the engine was restarted with the new binary" if ok else
+                                "the binary is in engine/ but the engine would not start: check logs/",
+                    })
+                    return
+                if path == "/tune/run":
+                    # a sweep needs the GPU to itself: give the chat engine's card back
+                    # first. unload() is the ask both engines understand - a direct one
+                    # quits its process, an attached one asks its own server to free the
+                    # card and can bring it back with /load.
+                    try:
+                        if hasattr(svc.engine, "unload"):
+                            svc.engine.unload()
+                        elif hasattr(svc.engine, "stop"):
+                            svc.engine.stop()
                     except Exception:  # noqa: BLE001 - an already-stopped engine is not an error
                         pass
                     self._json(200, tune_api.JOB.start(req))
                     return
                 if path == "/tune/stop":
                     self._json(200, tune_api.JOB.stop())
+                    return
+                if path == "/tune/apply":
+                    model = str(req.get("model") or "")
+                    result = tune_api.apply(model, Path(svc.config_path) if svc.config_path else ROOT / "config" / f"run-{model}.json")
+                    if result.get("ok") and hasattr(svc.engine, "restart"):
+                        try:
+                            svc.engine.restart()
+                            result["restarted"] = True
+                        except Exception as exc:  # noqa: BLE001
+                            result["restarted"] = False
+                            result["note"] = str(exc)
+                    self._json(200 if result.get("ok") else 400, result)
                     return
                 if path == "/assist/models/probe":           # re-time the endpoint and rewrite the pinned list
                     try:
@@ -5099,6 +5163,86 @@ def is_inline_config(raw: str) -> bool:
     return bool(raw) and raw.strip().startswith("{")
 
 
+def run_configs() -> list[Path]:
+    """Every run config in config/, newest first.
+
+    The build manifest is not a run config and is left out, so a directory that holds
+    only it still counts as having no config to run.
+    """
+    if not (ROOT / "config").is_dir():
+        return []
+    out = [p for p in (ROOT / "config").glob("*.json") if p.name != "build_options.json"]
+    return sorted(out, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def discover_config() -> Path | None:
+    """Which config to run when --config is not given: a run-*.json first, then any other.
+
+    A config is named by the model it runs, so the name is the user's to choose; the
+    run- prefix is only a hint about which one was written by the Tune export.
+    """
+    named = [p for p in run_configs() if p.name.startswith("run-")]
+    return (named or run_configs() or [None])[0]
+
+
+def config_error(message: str) -> str:
+    """A missing config says what is in config/ rather than only what is not there."""
+    found = run_configs()
+    if not found:
+        return message
+    listing = ", ".join(str(p.relative_to(ROOT)) for p in found)
+    return f"{message}\n  configs in config/: {listing}"
+
+
+def engine_binary(cfg: dict) -> str | None:
+    """Where the engine is: the run config's "exe", then engine/strata in this project,
+    then $STRATA_ENGINE.
+
+    A relative exe is resolved against the config's cwd: Windows' CreateProcess resolves
+    "engine/strata.exe" against nothing it is told about (WinError 2), so it is made
+    absolute here rather than left for the OS to guess.
+    """
+    exe = cfg.get("exe")
+    if exe:
+        return exe if os.path.isabs(exe) else os.path.abspath(os.path.join(cfg.get("cwd") or ".", exe))
+    for candidate in (ROOT / "engine" / ("strata.exe" if os.name == "nt" else "strata"),
+                      os.environ.get("STRATA_ENGINE")):
+        if candidate and Path(candidate).is_file():
+            return str(candidate)
+    return None
+
+
+def engine_url(cfg: dict, given: str | None) -> str | None:
+    """An engine the user told us to attach to: --engine-url, the config's engine_url,
+    or $HYPERCORE_ENGINE_URL. None when nobody named one."""
+    for url in (given, cfg.get("engine_url"), cfg.get("attach_url"), os.environ.get("HYPERCORE_ENGINE_URL")):
+        if url and str(url).strip():
+            url = str(url).strip()
+            return url if url.startswith("http") else "http://" + url
+    return None
+
+
+def find_running_engine(cfg: dict, own_port: int) -> str | None:
+    """Is an engine already up on this machine?
+
+    A second copy of the same model would not fit, so before starting one the server
+    asks the port the config names (and the usual ones) for a /health. The first one
+    that answers is the engine to attach to.
+    """
+    import socket
+    ports = [p for p in (cfg.get("port"), 8080, 8081, 8095) if isinstance(p, int) and p != own_port]
+    for port in dict.fromkeys(ports):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=3.0) as s:
+                s.sendall(b"GET /health HTTP/1.0\r\n\r\n")
+                body = s.recv(4096).decode("utf-8", "replace")
+        except OSError:
+            continue
+        if '"status": "ok"' in body or '"max_context"' in body:
+            return f"http://127.0.0.1:{port}"
+    return None
+
+
 def load_config_text(raw: str | None) -> dict:
     """Read --config, which may be a path to a JSON file or an inline JSON object.
 
@@ -5114,7 +5258,14 @@ def load_config_text(raw: str | None) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--engine", choices=["mock", "hypercore"], default="mock")
+    ap.add_argument("--engine", choices=["mock", "hypercore", "strata", "attach"], default="mock",
+                    help="mock: a scripted answer, for clients and tests; hypercore: the built worker; "
+                         "strata: engine/strata over its stdin/stdout protocol; attach: an engine that is "
+                         "already running, reached over its HTTP API (one engine per machine)")
+    ap.add_argument("--engine-url", dest="engine_url", default=os.environ.get("HYPERCORE_ENGINE_URL"),
+                    help="the address of an engine already running, e.g. http://127.0.0.1:8080 - the WebUI "
+                         "attaches to it instead of starting a second copy of the model (also \"engine_url\" "
+                         "in the config, and $HYPERCORE_ENGINE_URL)")
     ap.add_argument("--config", help="hypercore engine config (JSON: exe, args, cwd, tokenizer, model_name), "
                                      "written by setup.py")
     ap.add_argument("--host", default=None,
@@ -5166,10 +5317,15 @@ def main() -> int:
     ap.add_argument("--worker", default=None, help="hypercore-worker binary; default build-shared/hypercore-worker")
     ap.add_argument("--ipc-socket", default=None, help="UNIX socket path for the worker; default /tmp/hypercore-worker-<port>.sock")
     a = ap.parse_args()
+    if a.config is None:              # no --config: the newest run config in config/, if there is one
+        found = discover_config()
+        if found:
+            print(f"[hypercore] no --config: using {found.relative_to(ROOT)}", flush=True)
+            a.config = str(found)
     try:                              # a path or inline JSON; a bad path is an error, not defaults
         config_text = resolve_configuration_payload(a.config)
     except (ValueError, FileNotFoundError) as e:
-        ap.error(str(e))
+        ap.error(config_error(str(e)))
     cfg = parse_config_object(config_text)
     if a.gpu is not None:
         cfg["gpu"] = int(a.gpu) if a.gpu.strip().isdigit() else a.gpu
@@ -5194,7 +5350,48 @@ def main() -> int:
         types = json.loads((tpath / "token_type.json").read_text())
         tok = ST.Tokenizer(tokens, merges, types)
     hub = hub_from_config(cfg, a.mcp_config, yaml_path=str(ROOT / "mcp.yaml"))   # before the minutes of loading: a bad entry stops here
-    if a.engine == "hypercore":
+    attach_url = engine_url(cfg, a.engine_url)
+    if a.engine == "attach" and not attach_url:
+        ap.error("--engine attach needs --engine-url (or \"engine_url\" in the config, or $HYPERCORE_ENGINE_URL)")
+    if a.engine == "strata" and not attach_url and not engine_binary(cfg):
+        found = find_running_engine(cfg, a.port)
+        if found:
+            print(f"[hypercore] no engine in engine/ - attaching to the one already running at {found}", flush=True)
+            attach_url = found
+    if attach_url:
+        # One engine per machine: the WebUI runs against the engine another server
+        # already loaded, over the OpenAI API that engine's server speaks.
+        from serve.attached_engine import AttachedEngine
+        vision = None
+        sampling_defaults = sampling_defaults_from_config(cfg)
+        engine = AttachedEngine(attach_url, api_key=a.api_key, tokenizer=tok,
+                               model=cfg.get("model_name") or "")
+        print(f"attaching to the engine at {attach_url} ...", flush=True)
+        try:
+            engine.start()
+        except Exception as exc:  # noqa: BLE001 - the engine may not be up yet
+            raise SystemExit(f"[attach] {exc}") from None
+        print(f"attached: {engine.model}, context {engine.max_context} tokens "
+              f"(this server does not own that engine: stop it from its own page)", flush=True)
+        effort_end = None
+    elif a.engine == "strata":
+        exe = engine_binary(cfg)
+        if not exe:
+            ap.error('no engine to run: put one at engine/strata, set STRATA_ENGINE, '
+                     'or give a run config with an "exe"')
+        from serve.direct_engine import DirectEngine
+        vision = None
+        sampling_defaults = sampling_defaults_from_config(cfg)
+        engine = DirectEngine(exe, cfg.get("args") or [],
+                             startup_timeout_s=model_startup_s(cfg),
+                             env=child_env(cfg), log_path=cfg.get("log"))
+        print("starting the Strata engine ...", flush=True)
+        try:
+            engine.start()
+        except Exception as exc:  # noqa: BLE001 - the engine may not be installed yet
+            raise SystemExit(f"[strata] {exc}") from None
+        effort_end = None
+    elif a.engine == "hypercore":
         if not cfg:
             ap.error("--engine hypercore needs --config")
         vision = None
@@ -5224,7 +5421,10 @@ def main() -> int:
             print(f"[hypercore] layer split across GPUs {gpu_list(cfg)} ({split})", flush=True)
         # a relative "exe" is the config's cwd's: Windows' CreateProcess resolves "engine/hypercore.exe" against nothing
         # it is told about (WinError 2), so it is made absolute here
-        exe = cfg["exe"] if os.path.isabs(cfg["exe"]) else os.path.abspath(os.path.join(cfg.get("cwd") or ".", cfg["exe"]))
+        exe = engine_binary(cfg)
+        if not exe:
+            ap.error('no engine to run: put one at engine/strata, set STRATA_ENGINE, '
+                     'or give a run config with an "exe"')
         try:
             silence = engine_silence_s(cfg)             # #481: checked before the (minutes-long) start
         except ValueError as e:

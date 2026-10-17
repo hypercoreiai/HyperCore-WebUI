@@ -261,6 +261,10 @@ body[data-surface="metal"] {
   border-radius: var(--st-radius); background: var(--st-panel); color: var(--st-ink); }
 .tune-pins { display: flex; flex-wrap: wrap; gap: var(--st-s-3); align-items: center; }
 .tune-pins label { flex-direction: row; align-items: center; gap: 6px; }
+.tune-priors { display: flex; flex-direction: column; gap: 4px; }
+.tune-priors ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap;
+  gap: 4px 14px; font: 400 12px var(--st-font-mono); color: var(--st-ink-soft); }
+.tune-priors .ok { color: var(--st-accent); }
 .tune-actions { display: flex; gap: var(--st-s-3); align-items: center; flex-wrap: wrap; }
 .tune-bar { height: 8px; border-radius: 99px; background: var(--st-line); overflow: hidden; }
 .tune-bar div { height: 100%; width: 0; background: var(--st-accent); transition: width .4s ease; }

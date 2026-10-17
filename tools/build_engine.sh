@@ -9,6 +9,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAG="${1:-main}"
+shift || true            # the rest of the line is cmake -D flags for the build
 CLONE="$ROOT/tmp/strata-$TAG"
 
 rm -rf "$CLONE"

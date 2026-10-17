@@ -6,10 +6,11 @@
 "use strict";
 const fs = require("fs");
 
-const APP = fs.readFileSync(__dirname + "/app.js", "utf8");
-const PAGE = fs.readFileSync(__dirname + "/index.html", "utf8");
-const CSS = fs.readFileSync(__dirname + "/app.css", "utf8");
-const TOKENS = fs.readFileSync(__dirname + "/tokens.css", "utf8");
+const WEB = __dirname + "/../serve/web";
+const APP = fs.readFileSync(WEB + "/app.js", "utf8");
+const PAGE = fs.readFileSync(WEB + "/index.html", "utf8");
+const CSS = fs.readFileSync(WEB + "/app.css", "utf8");
+const TOKENS = fs.readFileSync(WEB + "/tokens.css", "utf8");
 
 function surfaceModule() {
   const start = APP.indexOf("const METAL_STOPS");

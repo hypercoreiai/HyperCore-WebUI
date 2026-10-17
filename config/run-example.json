@@ -1,0 +1,25 @@
+{
+  "_note": "Template for config/run-<model>.json. Copy it, fill in the paths on your box, and run ./run.sh <model>. Paths are absolute because the engine is started as a separate process; nothing here is read unless a run config names it.",
+  "exe": "engine/strata",
+  "args": [
+    "--pack", "/ABSOLUTE/PATH/TO/packs/q2_0",
+    "--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf",
+    "--ple-gguf", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00002-of-00002.gguf",
+    "--expert-profile", "/ABSOLUTE/PATH/TO/expert-profile.bin",
+    "--expert-cache", "auto",
+    "--prefill", "auto",
+    "--spec", "4",
+    "--mtp", "/ABSOLUTE/PATH/TO/mtp/rt",
+    "--max-context", "131072",
+    "--kv", "int8",
+    "--resident-experts"
+  ],
+  "cwd": ".",
+  "tokenizer": "/ABSOLUTE/PATH/TO/packs/q2_0/tokenizer",
+  "model_name": "q2_0",
+  "log": "logs/strata-q2_0.log",
+  "port": 8080,
+  "host": "0.0.0.0",
+  "gpu": 0,
+  "gpus_asked": true
+}

@@ -1,7 +1,7 @@
 {
-  "source": "/home/ai-user0/Strata",
+  "source": "/home/ai-user0/HyperCore-WebUI/tmp/strata-main",
   "project": "strata",
-  "version": "0.1.40",
+  "version": "0.1.45",
   "cmake_options": [
     {
       "name": "STRATA_BUILD_CONVERSATION_TESTS",
@@ -69,8 +69,15 @@
     {
       "name": "STRATA_MMQ_KQUANTS",
       "kind": "bool",
+      "default": "ON",
+      "help": "Build the MMQ prompt kernels for Q4_K / Q5_K / Q5_1 / Q6_K: the experts of Unsloth's K-quant files, and on HIP the dense GGUF projections (STRATA_DENSE_MMQ)",
+      "visible": true
+    },
+    {
+      "name": "STRATA_MMQ_TAB",
+      "kind": "bool",
       "default": "OFF",
-      "help": "Build the MMQ prompt kernels for Q4_K / Q5_K / Q5_1 / Q6_K: the CUDA experts of Unsloth's UD-Q4_K_XL, and on HIP the dense GGUF projections (STRATA_DENSE_MMQ)",
+      "help": "Build the pointer-table prompt MMQ for STRATA_MMQ_DIRECT=1 (CUDA; ~37 MiB VRAM per GPU)",
       "visible": true
     },
     {
@@ -102,6 +109,13 @@
       "visible": false
     },
     {
+      "name": "STRATA_PARITY_GFX1100_QSA_SCORES",
+      "kind": "bool",
+      "default": "OFF",
+      "help": "Build the exact gfx1100 QSA score/ID check",
+      "visible": false
+    },
+    {
       "name": "STRATA_PLE_FIXTURE_DIR",
       "kind": "int",
       "default": "${CMAKE_CURRENT_SOURCE_DIR}/bench/micro",
@@ -125,9 +139,16 @@
     {
       "name": "STRATA_Q6K_EXPERTS",
       "kind": "bool",
-      "default": "OFF",
-      "help": "Build the Q6_K gate/up grouped expert kernels (UD-Q6_K_XL)",
+      "default": "ON",
+      "help": "Build the Q6_K gate/up grouped expert kernels (UD-Q6_K_XL, UD-Q5_K_XL)",
       "visible": true
+    },
+    {
+      "name": "STRATA_SDE",
+      "kind": "int",
+      "default": "",
+      "help": "Intel SDE (sde / sde64): also run the CPU tests on an emulated AVX2-only and an AVX-VNNI-only CPU",
+      "visible": false
     },
     {
       "name": "STRATA_WERROR",
@@ -205,6 +226,61 @@
       "flag": "--vision-tokens",
       "choices": null,
       "type": "int",
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--images",
+      "choices": [
+        "qwen-image",
+        "no"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--image-quant",
+      "choices": [
+        "Q4_K_M",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--image-backend",
+      "choices": [
+        "cuda",
+        "hip",
+        "vulkan",
+        "cpu"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--image-native",
+      "choices": [
+        "on",
+        "off"
+      ],
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--image-gpu-policy",
+      "choices": [
+        "auto",
+        "keep",
+        "shrink",
+        "unload"
+      ],
+      "type": null,
       "default": null,
       "help": ""
     },
@@ -342,6 +418,20 @@
       "help": ""
     },
     {
+      "flag": "--source",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
+      "flag": "--inspect",
+      "choices": null,
+      "type": null,
+      "default": null,
+      "help": ""
+    },
+    {
       "flag": "--cuda",
       "choices": [
         "12",
@@ -415,6 +505,13 @@
       "help": ""
     },
     {
+      "flag": "--replicas",
+      "choices": null,
+      "type": "int",
+      "default": null,
+      "help": ""
+    },
+    {
       "flag": "--kv-streaming",
       "choices": [
         "auto",
@@ -446,6 +543,12 @@
   ],
   "targets": [
     "arch_defaults_test",
+    "aux_cpus_test",
+    "b6_mmvq_bench",
+    "batch_groups_test",
+    "batch_read_test",
+    "batch_rows_parity",
+    "batch_rows_test",
     "bf16_bits_test",
     "bf16_gemv_parity",
     "controller_test",
@@ -463,28 +566,40 @@
     "dequant_bf16_test",
     "dequant_q5_1_test",
     "dequant_s2_parity",
+    "dequant_wide_parity",
     "direct_file_async_test",
     "dma_batch_parity",
+    "draft_kv_plan_test",
     "draft_policy_test",
     "elementwise_parity",
     "exchange_storage_test",
+    "expdec_bench",
     "expert_cache_per_layer_test",
     "expert_cache_segmented_test",
+    "expert_cache_slot_guard_test",
     "expert_layout_test",
     "expert_multi_test",
     "expert_parity",
     "expert_profile_save_test",
+    "expert_profile_version_test",
     "file_expert_source_test",
     "fused_gr_bench",
     "gdn_parity",
     "gdn_rec_parity",
     "gemm_bf16_parity",
+    "gemm_f32_parity",
+    "gfx906_gdn_rec_head",
+    "gfx906_qsa_query_swizzle_probe",
+    "gguf_geometry_test",
     "gguf_reader_test",
     "gguf_split_test",
     "gr_multi_parity",
     "gr_parity",
+    "gr_upmix_parity",
     "graph_registry_test",
+    "hc_persist_parity",
     "hip_expert_cache_staging",
+    "hip_gdn_chunked",
     "hip_gdn_rec_head",
     "hip_gemm_f16_io_parity",
     "hip_handoff",
@@ -499,27 +614,45 @@
     "hip_prefill_hipblaslt_gemm",
     "hip_prefill_mmq_parity",
     "hip_prefill_native_batch",
+    "hip_prefill_rocblas_gemm",
     "hip_prefill_wmma_gemm_parity",
     "hip_prompt_attn_wmma",
     "hip_q2_zero",
     "hip_router_fast",
     "hit_cpu_order_parity",
+    "host_graph_launch_test",
+    "host_limits_test",
+    "iq_avx1_parity",
     "iq_avx2_parity",
     "iq_multi_parity",
     "iq_parity",
+    "kq_cpu_bench",
     "kv_hybrid_parity",
     "kv_q4_parity",
     "kv_q8_parity",
     "kv_steps_parity",
     "kv_stream_parity",
+    "kv_window_parity",
+    "logit_bias_test",
+    "memory_guard_test",
     "message_boundary_test",
+    "mmq_expert_bench",
+    "mmq_nvfp4_parity",
+    "mmvf_rows_parity",
+    "mmvq_il_parity",
     "mmvq_multi_parity",
+    "model_family_test",
     "native_dense_ple_key_test",
     "native_expert_bench",
     "native_expert_parity",
     "native_grouped_parity",
     "native_mmvq_multi",
     "native_multi_parity",
+    "nvfp4_avx512_parity",
+    "nvfp4_decode_bench",
+    "nvfp4_expert_gpu_parity",
+    "pa_bench",
+    "pdl_parity",
     "pinned_capture",
     "pinned_shared_test",
     "platform_memory_test",
@@ -529,21 +662,33 @@
     "ple_reader_test",
     "pool_affinity_test",
     "pool_stress",
+    "pool_tasks_test",
     "pool_test",
     "prefill_fused_iq_test",
     "prefill_fused_moe_test",
     "prefill_mmq_kquant_test",
+    "prefill_mmq_scatter_test",
+    "prefill_mmq_tab_test",
     "q2_bitplane_parity",
     "q5_projection_parity",
+    "q8_gemv_bench",
+    "q8k_quant_parity",
+    "qsa_merge_daily_parity",
     "qsa_parity",
     "qsa_prompt_attn_parity",
+    "qsa_rows_bench",
+    "qsa_scores_gfx1100_parity",
+    "qsa_scores_parity",
     "qsa_select_bench",
+    "qsa_slots_parity",
     "qsa_topk_active_parity",
     "qsa_topk_parity",
     "quantize_act_parity",
     "resident_plan_parity",
     "rope_parity",
+    "route_resident_parity",
     "route_window_parity",
+    "router_chain_bench",
     "router_dot_parity",
     "router_top10_parity",
     "s2_expert_grouped_parity",
@@ -552,7 +697,14 @@
     "s_gemv_parity",
     "s_gemv_q8k_parity",
     "sampler_parity",
+    "session_save_reclaim_test",
+    "share_rules_test",
     "shared_expert_parity",
+    "spec_prob_test",
+    "spec_verify_parity",
+    "split_lend_complement_test",
+    "split_ring_test",
+    "split_rules_test",
     "strata",
     "strata-concurrent",
     "strata-dequant",
@@ -561,10 +713,23 @@
     "strata-load",
     "strata-overlap",
     "strata-plan",
+    "strata-q36",
+    "strata-q36ref",
     "suffix_drafter_test",
     "tune_hipblaslt",
+    "tune_rocblas",
     "tuning_header_arch_family_test",
+    "verify_batch_parity",
     "verify_parity",
     "vmm_test"
-  ]
+  ],
+  "changes": {
+    "from": "0.1.45",
+    "to": "0.1.45",
+    "added_options": [],
+    "removed_options": [],
+    "changed_defaults": [],
+    "added_flags": [],
+    "removed_flags": []
+  }
 }

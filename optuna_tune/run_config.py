@@ -114,7 +114,7 @@ def build_run_config(
     cfg: dict[str, Any] = dict(base) if base else {}
     setup = _setup_module()
 
-    engine = str(record.get("engine") or ROOT / "engine" / "hypercore")
+    engine = str(record.get("engine") or ROOT / "engine" / "strata")
     cfg["exe"] = engine
     cfg["args"] = clean_args(args)
     cfg["cwd"] = str(ROOT)

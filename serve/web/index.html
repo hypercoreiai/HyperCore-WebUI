@@ -280,10 +280,17 @@
         <span class="muted small">Pin a dimension so the sweep searches around it:</span>
         <div id="tune-pins"></div>
       </div>
+      <div class="tune-priors">
+        <span class="muted small">Priors: run data already measured on this machine seeds the search.</span>
+        <ul id="tune-priors" class="small"></ul>
+      </div>
       <div class="tune-actions">
         <button class="st-btn st-btn--primary" id="tune-run" type="button">Run sweep</button>
         <button class="st-btn" id="tune-stop" type="button" disabled>Stop</button>
         <label class="muted small"><input id="tune-benchmark" type="checkbox"> Benchmark the winner</label>
+        <label class="muted small"><input id="tune-fresh" type="checkbox"> Start cold (ignore previous runs)</label>
+        <label class="muted small"><input id="tune-cross-hardware" type="checkbox"> Use priors from other hardware</label>
+        <label class="muted small"><input id="tune-cross-objective" type="checkbox"> Reuse priors from other objectives</label>
       </div>
     </div>
 

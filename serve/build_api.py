@@ -133,6 +133,16 @@ class BuildJob:
         self.version: str | None = None
         self.started: float | None = None
         self.result: dict[str, Any] | None = None
+        self.proc: subprocess.Popen | None = None
+
+    def cancel(self) -> dict[str, Any]:
+        """Stop a build in progress. tmp/ is left in place; the next build removes it."""
+        if self.proc and self.state not in ("idle", "done", "failed"):
+            self.proc.terminate()
+            self.state = "cancelled"
+            self.log_line("build cancelled")
+            return {"cancelled": True}
+        return {"cancelled": False}
 
     def log_line(self, line: str) -> None:
         self.log.append(line)
@@ -194,7 +204,7 @@ class BuildJob:
             self.state = "configuring"
             prev = json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.is_file() else None
             sys.path.insert(0, str(ROOT / "tools"))
-            from extract_build_options import manifest, diff  # noqa: PLC0415
+            from extract_build_options import diff, manifest  # a local tool, not a package
             m = manifest(clone)
             if prev:
                 m["changes"] = diff(prev, m)
@@ -213,8 +223,9 @@ class BuildJob:
             if code != 0:
                 raise RuntimeError("cmake configure failed")
             targets = ["strata", "strata-vision", "hypercore-worker"]
+            # one --target with the list: repeating the flag keeps only the last one
             code = self.run_stream(["cmake", "--build", str(build_dir),
-                                   *sum((["--target", t] for t in targets), []),
+                                   "--target", *targets,
                                    "-j", str(os.cpu_count() or 4)])
             if code != 0:
                 raise RuntimeError("the engine build failed")

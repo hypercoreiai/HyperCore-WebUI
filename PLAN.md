@@ -25,14 +25,31 @@ The only native artefact needed at runtime is engine/strata.
    DONE, STOP, QUIT, SWAIT, SERR, BT/BDONE.
    Verified against Strata src/program/generate.cpp (0.1.45).
 2. Engine location - resolved in this order:
-   --engine flag -> run-config "exe" key -> engine/strata in this project ->
-   STRATA_ENGINE env var. No hard-coded absolute paths.
+   --engine flag -> run-config "engine_url" -> --engine-url / $HYPERCORE_ENGINE_URL
+   -> run-config "exe" key -> engine/strata in this project -> STRATA_ENGINE env
+   var. No hard-coded absolute paths.
 3. Feature gating - anything HyperCore-only (HYPERCORE_MMVQ_IL, expert-residency
    counters) is read from the engine INFO line and shown only if present. A stock
    Strata engine never breaks the page.
 4. API surface - OpenAI and Anthropic endpoints unchanged.
 5. tmp/ is scratch - deleting tmp/ must not affect anything at runtime. It is
    gitignored and never read by the server, only by the Build tab.
+
+### 1.1 One engine per machine (attach mode)
+
+A Strata engine is tens of GB, so a second WebUI on the same PC does not load a
+second copy of it:
+
+- `run.sh` checks the port before starting. If the WebUI is already up there, it
+  opens that page instead of starting another engine.
+- `--engine-url`, `"engine_url"` in a run config, or `$HYPERCORE_ENGINE_URL` makes
+  the server attach to an engine another server already loaded, over the OpenAI API
+  that engine's server speaks. `serve/attached_engine.py` implements the same
+  `generate(prompt_ids, max_new, sampling, cancel) -> token ids` boundary as the
+  direct engine, so no tab knows the difference.
+- Attaching is a read relationship, not an ownership one: stop, unload and VRAM
+  resize are asks to the engine's own server, and the About tab names the address
+  the engine lives at.
 
 ---
 
@@ -58,9 +75,12 @@ HyperCore-WebUI/
     bayesian_tune.py search_space.py engine_runner.py hardware.py
     history.py run_config.py prompt_transfer.py winner_bench.py
     best_prefill.py max_tune.sh stub_engine.py fixtures/
+    history/                  # run data per machine; seed-* priors are committed
+    results/                  # raw sweep logs and CSVs                  (gitignored)
 
   tools/
     extract_build_options.py   # NEW: parses CMakeLists.txt + setup.py from a clone
+    import_tune_history.py     # NEW: brings measured priors from another install
     build_engine.sh / .bat     # NEW: clone -> configure -> build -> transfer -> clean
 
   engine/                     # strata, strata-vision, hypercore-worker, BUILD.json
@@ -131,6 +151,15 @@ Behaviour:
 
 Endpoints: GET /tune/params, POST /tune/run, GET /tune/status, GET /tune/results,
 POST /tune/stop, POST /tune/apply, GET /tune/export.
+
+Priors: `optuna_tune/history/` is keyed to the machine, and a sweep folds its own
+trials into it, so the next one starts from what already worked. `tools/import_tune_history.py`
+brings measured configurations from another install (default `~/black_box/optuna_tune/history`):
+DRY rows dropped, duplicates folded to the best score, only the top N kept, written as
+`seed-<slug>_<model>_<objective>_<context>.json` with provenance. Seven such priors are
+committed (best 30 per objective from an i9-14900KF / RTX 4090 box, 228 KB). A record
+whose hardware fingerprint differs is listed in the tab but only used when the operator
+ticks "use priors from other hardware". Raw `optuna_tune/results/` logs are not imported.
 
 ### 3.5 Build - new
 See section 4.

@@ -11,8 +11,9 @@
 const fs = require("fs");
 const path = require("path");
 
-const APP = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
-const HTML = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+const WEB = path.join(__dirname, "..", "serve", "web");
+const APP = fs.readFileSync(path.join(WEB, "app.js"), "utf8");
+const HTML = fs.readFileSync(path.join(WEB, "index.html"), "utf8");
 
 function slice(src, from, to, what) {
   const i = src.indexOf(from);
@@ -83,7 +84,7 @@ check("the resume prompt is 'Complete the open tasks'",
 for (const id of ["stop-btn", "stop-icon", "stop-text", "shutdown-btn", "shutdown-text"])
   check(`index.html has id="${id}"`, HTML.includes(`id="${id}"`));
 check("the Start state has a CSS rule", /\.st-btn\[data-mode="start"\]/.test(
-      fs.readFileSync(path.join(__dirname, "components.css"), "utf8")));
+      fs.readFileSync(path.join(WEB, "components.css"), "utf8")));
 
 // ---- the composer's Stop button -------------------------------------------
 api.setBusy(false);                    // app.js does this at startup

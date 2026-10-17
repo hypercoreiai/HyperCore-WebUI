@@ -228,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         "schema": "hypercore.max_run/1",
         "model": args.model,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "engine": str(ROOT / "engine" / "hypercore"),
+        "engine": str(ROOT / "engine" / "strata"),
         "hardware_slug": "Intel-Core-i9-14900KF_NVIDIA-GeForce-RTX-4090_31GB_PCIe4x16",
         "objective": "prefill",
         "context": context,

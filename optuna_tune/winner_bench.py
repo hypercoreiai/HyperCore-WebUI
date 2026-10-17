@@ -600,7 +600,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     config = Path(args.config) if args.config else args.root / f"max_run_{args.model}.json"
     cfg = load_winner(config)
-    engine = args.engine or cfg.get("exe") or str(ROOT / "engine" / "hypercore")
+    engine = args.engine or cfg.get("exe") or str(ROOT / "engine" / "strata")
     hw = fingerprint() if not args.hardware else hardware_from(args.hardware)
     if hw is None:
         raise SystemExit("winner_bench: could not probe this machine")

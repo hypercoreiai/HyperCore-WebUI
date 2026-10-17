@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -45,27 +46,109 @@ FILE_RE = re.compile(r"(record|history|bench report|report|csv|deliverable)s?:\s
 OBJECTIVES = ("gen", "prefill", "latency", "balance")
 PINABLE = ("ple-io", "kv", "kvgrow", "hostcore", "affinity", "worker", "tail", "prefill-cap")
 
+# The dimension the tab pins, and the flag the search space uses for it. The names
+# in PINABLE are the aliases the CLI accepts, so the form and the CLI agree.
+PIN_FLAGS = {
+    "ple-io": "--ple-io",
+    "kv": "--kv",
+    "kvgrow": "--kv-grow",
+    "hostcore": "--host-core",
+    "affinity": "--pool-affinity",
+    "worker": "--pool-workers",
+    "tail": "--prompt-cache-tail",
+    "prefill-cap": "--prefill",
+}
+
+
+def pin_options() -> dict[str, Any]:
+    """What each pinable dimension accepts, read from the search space itself.
+
+    The tab renders a box per dimension; without the accepted values a typo in one
+    of them is an argparse error deep inside a subprocess. This comes from
+    optuna_tune/search_space.py, so a release that adds a kv mode adds it here too.
+    """
+    try:
+        from optuna_tune.search_space import build_space
+    except Exception:  # noqa: BLE001 - optuna is optional; the tab still shows the form
+        return {}
+    out: dict[str, Any] = {}
+    for param in build_space():
+        name = next((n for n, flag in PIN_FLAGS.items() if flag == param.flag), None)
+        if name is None:
+            continue
+        if param.kind == "choice":
+            out[name] = {"kind": "choice", "choices": list(param.choices)}
+        else:
+            out[name] = {"kind": param.kind, "low": param.low, "high": param.high,
+                        "step": param.step}
+    return out
+
 
 def available_models() -> list[str]:
-    """Quant names the tuner can be pointed at, from the packs on disk."""
+    """Quant names the tuner can be pointed at: every run config in config/."""
     out = []
     for path in (ROOT / "config").glob("run-*.json"):
         out.append(path.stem.replace("run-", ""))
     return sorted(set(out)) or ["q2_0"]
 
 
+def run_config(model: str) -> dict[str, Any]:
+    """The run config a model name points at, or an empty dict if there is none."""
+    path = ROOT / "config" / f"run-{model}.json"
+    if not path.is_file():
+        return {}
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def engine_paths(model: str) -> dict[str, str]:
+    """Where the sweep should get its engine and its weights.
+
+    There is no download logic here: the paths are the ones the run config already
+    carries, and the Tune tab's text boxes can override them. The engine defaults to
+    engine/strata, which is the only native thing this project needs.
+    """
+    cfg = run_config(model)
+    args = cfg.get("args") or []
+    out: dict[str, str] = {}
+    for flag, key in (("--pack", "pack"), ("--native", "native"),
+                      ("--ple-gguf", "ple_gguf"), ("--mtp", "mtp"),
+                      ("--expert-profile", "expert_profile")):
+        if flag in args and args.index(flag) + 1 < len(args):
+            out[key] = str(args[args.index(flag) + 1])
+    exe = cfg.get("exe") or str(ROOT / "engine" / ("strata.exe" if IS_WIN else "strata"))
+    out["engine"] = exe
+    prompt = cfg.get("prompt_tokens_file") or str(TUNE_DIR / "fixtures" / "prompt.json")
+    out["prompt_tokens_file"] = prompt
+    return out
+
+
 def build_command(request: dict[str, Any]) -> list[str]:
     """max_tune.sh arguments from the tab's form. Unknown keys are ignored."""
     py = sys.executable
     cmd = [py, str(TUNE_DIR / "bayesian_tune.py")]
-    if request.get("model"):
-        cmd += ["--model", str(request["model"])]
+    model = str(request.get("model") or "")
+    if model:
+        cmd += ["--model", model]
+    paths = engine_paths(model)
+    # only the path flags the tuner actually has: engine, pack, native, ple-gguf,
+    # mtp and the prompt token file. The expert profile is not a CLI flag - the
+    # tuner takes it from the run config it reads, so the tab must not invent one.
+    for key, flag in (("engine", "--engine"), ("pack", "--pack"), ("native", "--native"),
+                      ("ple_gguf", "--ple-gguf"), ("mtp", "--mtp"),
+                      ("prompt_tokens_file", "--prompt-tokens-file")):
+        value = request.get(key) or paths.get(key)
+        if value:
+            cmd += [flag, str(value)]
     for objective in OBJECTIVES:
         if request.get("objective") == objective:
             cmd.append(f"--{objective}")
             break
     if request.get("context"):
-        cmd += ["--max-context", str(int(request["context"]))]
+        cmd += ["--cntx", str(int(request["context"]))]
     if request.get("trials"):
         cmd += ["--trials", str(int(request["trials"]))]
     if request.get("seed") is not None:
@@ -85,12 +168,18 @@ def build_command(request: dict[str, Any]) -> list[str]:
         value = request.get("pin", {}).get(name)
         if value is not None:
             cmd += [f"--{name}", str(value)]
-    if request.get("resume"):
-        cmd.append("--load")
+    if request.get("fresh"):
+        cmd.append("--no-load")   # ignore previous runs; the tuner loads them by default
+    if request.get("cross_hardware"):
+        cmd.append("--allow-hardware-mismatch")
+    if request.get("cross_objective"):
+        cmd.append("--cross-objective")
     if request.get("replay"):
         cmd += ["--replay", str(request["replay"])]
-    if request.get("benchmark"):
-        cmd.append("--benchmark")
+    # the sweep benchmarks the winner unless the tab's box is unchecked; the CLI
+    # has no --benchmark, only --no-benchmark
+    if not request.get("benchmark"):
+        cmd.append("--no-benchmark")
     if request.get("dry_run"):
         cmd.append("--dry-run")
     cmd += ["--deliverable-dir", str(ROOT / "config")]
@@ -183,6 +272,91 @@ class TuneJob:
 
 
 JOB = TuneJob()
+
+
+def deliverables(model: str) -> dict[str, str]:
+    """The files a finished sweep wrote for a model: the run pair and the record."""
+    out = {}
+    for name, path in (("run_json", ROOT / "config" / f"max_run_{model}.json"),
+                       ("run_sh", ROOT / "config" / f"max_run_{model}.sh"),
+                       ("record", RESULTS / f"max_run_{model}.record.json")):
+        if path.is_file():
+            out[name] = str(path)
+    if RESULTS.is_dir():
+        csvs = sorted(RESULTS.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if csvs:
+            out["csv"] = str(csvs[0])
+    return out
+
+
+def apply(model: str, target: Path) -> dict[str, Any]:
+    """Write the winner into the run config the server is using.
+
+    Only "args" is replaced; the keys the config carries that the sweep does not own
+    (host, api_key, tokenizer, log, mcp_servers) stay as they are, so applying a sweep
+    is a drop-in change rather than a rewrite of the file.
+    """
+    source = ROOT / "config" / f"max_run_{model}.json"
+    if not source.is_file():
+        return {"error": "no finished sweep for this model: run one first"}
+    if not target.is_file():
+        return {"error": f"the active run config {target.name} does not exist"}
+    try:
+        winner = json.loads(source.read_text(encoding="utf-8"))
+        active = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"error": f"could not read the configs: {exc}"}
+    if not isinstance(winner.get("args"), list):
+        return {"error": "the sweep record has no engine arguments"}
+    backup = target.with_suffix(target.suffix + ".bak")
+    try:
+        shutil.copy2(target, backup)
+        active["args"] = winner["args"]
+        target.write_text(json.dumps(active, indent=1) + "\n", encoding="utf-8")
+    except OSError as exc:
+        return {"error": f"could not write the run config: {exc}"}
+    return {"ok": True, "args": winner["args"], "backup": str(backup),
+           "note": "the engine restarts with these arguments"}
+
+
+def priors() -> list[dict[str, Any]]:
+    """The run data a sweep could load, and whether it matches this machine.
+
+    optuna_tune/history holds one file per machine/model/objective/context. Files
+    named seed-* were imported from another install by tools/import_tune_history.py:
+    they are real measurements, but of another box, so the tuner only uses them with
+    --allow-hardware-mismatch. The tab shows this so a cold start is a choice rather
+    than a surprise.
+    """
+    if not HISTORY.is_dir():
+        return []
+    try:
+        if str(TUNE_DIR) not in sys.path:
+            sys.path.insert(0, str(TUNE_DIR))
+        from hardware import differences, detect, hardware_from
+        here = detect()
+    except Exception:                      # a box with no GPU to probe still gets the list
+        here, differences, detect = None, None, None
+    out: list[dict[str, Any]] = []
+    for path in sorted(HISTORY.glob("*.json")):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or not isinstance(rec.get("trials"), list):
+            continue
+        diffs: list[str] = []
+        if here is not None:
+            try:
+                diffs = differences(here, hardware_from(rec))
+            except Exception:
+                diffs = ["unreadable hardware record"]
+        out.append({"file": path.name, "model": rec.get("model"),
+                    "objective": rec.get("objective"), "context": rec.get("context"),
+                    "trials": len(rec["trials"]), "hardware": rec.get("hardware_slug"),
+                    "matches": not diffs, "differs": diffs,
+                    "seed": bool(rec.get("seed")), "updated": rec.get("updated_utc")})
+    return out
 
 
 def records(limit: int = 20) -> list[dict[str, Any]]:

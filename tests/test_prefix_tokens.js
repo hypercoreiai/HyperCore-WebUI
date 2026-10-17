@@ -9,7 +9,8 @@
 "use strict";
 
 const fs = require("fs");
-const APP = fs.readFileSync(__dirname + "/app.js", "utf8");
+const WEB = __dirname + "/../serve/web";
+const APP = fs.readFileSync(WEB + "/app.js", "utf8");
 
 function slice(src, from, to, what) {
   const i = src.indexOf(from);

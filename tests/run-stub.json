@@ -1,0 +1,9 @@
+{
+  "exe": "tests/stub_engine.py",
+  "cwd": ".",
+  "args": [],
+  "model_name": "stub",
+  "port": 8082,
+  "host": "127.0.0.1",
+  "api_key": "0000"
+}

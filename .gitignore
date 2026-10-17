@@ -13,10 +13,18 @@ __pycache__/
 .coverage
 
 # Tuning output and machine-specific history stay on the box that produced them.
-optuna_tune/results/
-optuna_tune/history/
+# The seed-* priors are the exception: they are the measured configurations from a
+# reference machine, trimmed to the best few, and shipped so a first sweep is not cold.
+optuna_tune/results/*
+optuna_tune/history/*
+!optuna_tune/history/seed-*.json
 
-# Local run configs and the API key.
+# Local run configs and the API key. The example is the template a new config is
+# copied from; the real ones name absolute paths on one particular box.
 config/run-*.json
 config/run-*.sh
+!config/run-example.json
 .env
+
+# Runtime logs the app writes to itself.
+serve/assist_calls.jsonl

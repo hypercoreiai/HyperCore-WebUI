@@ -567,7 +567,9 @@ function renderAbout(eng, hw, st) {
   const kv = {int8: "8-bit", q4_0: "4-bit (Hadamard-rotated)", fp16: "16-bit"}[eng.kv] || eng.kv;
   facts($("facts-engine"), [
     ["Model", eng.model],
-    ["Engine", eng.version ? `v${eng.version}` : "built from source"],
+    ["Engine", eng.attached ? `v${eng.version || "?"} - attached, not started here` : (eng.version ? `v${eng.version}` : "built from source")],
+    ...(eng.attached ? [["Engine address", eng.engine_url, true],
+                       ["Engine owner", "the server that loaded it; this page only reads its answers"]] : []),
     ["Context", eng.max_context ? `${fmt(eng.max_context)} tokens` : null],
     ["KV cache", kv ? `${kv}${eng.kv_resident ? `, streamed: ${fmt(eng.kv_resident)} positions per layer in VRAM, the rest in RAM` : ", all in VRAM"}` : null],
     ["Experts in VRAM", eng.expert_slots ? `${fmt(eng.expert_slots)} (${gb((eng.expert_cache_mib || 0) * 1048576)} GB)` : null],
@@ -2118,11 +2120,45 @@ function loadTune() {
   fetch("tune/params", { headers: headers() }).then(r => r.json()).then((params) => {
     if (params.models && params.models.length) $("tune-model").value = params.models[0];
     const pins = $("tune-pins");
-    pins.innerHTML = (params.pinable || []).map((name) =>
-      `<label>${name}<input type="text" data-pin="${name}" placeholder="unset"></label>`).join("");
+    const opts = params.pin_options || {};
+    // an empty box means "search this dimension"; a filled one pins it
+    pins.innerHTML = (params.pinable || []).map((name) => {
+      const o = opts[name];
+      if (o && o.kind === "choice") {
+        return `<label>${name}<select data-pin="${name}"><option value="">search</option>` +
+          o.choices.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("") +
+          `</select></label>`;
+      }
+      if (o) {
+        return `<label>${name}<input type="number" data-pin="${name}" min="${o.low}" ` +
+          `max="${o.high}" step="${o.step}" placeholder="search"></label>`;
+      }
+      return `<label>${name}<input type="text" data-pin="${name}" placeholder="search"></label>`;
+    }).join("");
+    renderPriors(params.priors || []);
     renderTuneStatus(tuneState || { state: "idle" });
   }).catch(() => { $("tune-meta").textContent = "the tuner is not available on this server"; });
   pollTune();
+}
+
+function renderPriors(priors) {
+  const list = $("tune-priors");
+  if (!list) return;
+  if (!priors.length) {
+    list.innerHTML = `<li class="muted">No run data yet: the first sweep on this machine starts cold.</li>`;
+    return;
+  }
+  const here = priors.filter((p) => p.matches).length;
+  const other = priors.length - here;
+  list.innerHTML = priors.map((p) => `<li>${esc(p.model)} / ${esc(p.objective)} / ${p.context}` +
+    ` - ${p.trials} measured configurations ` +
+    (p.matches ? `<span class="ok">this machine</span>`
+               : `<span class="muted">${esc(p.hardware || "another machine")}</span>`) +
+    (p.seed ? ` <span class="muted">imported</span>` : "") + "</li>").join("");
+  if (other && !$("tune-cross-hardware").checked) {
+    list.innerHTML += `<li class="muted">${other} of them were measured on other hardware; ` +
+      `tick "use priors from other hardware" to let the sweep use them.</li>`;
+  }
 }
 
 function pollTune() {
@@ -2171,6 +2207,8 @@ $("tune-run").onclick = async () => {
     sampler: $("tune-sampler").value, mode: $("tune-mode").value,
     vram_min: Number($("tune-vram-min").value), vram_max: Number($("tune-vram-max").value),
     pcie: Number($("tune-pcie").value), pin, benchmark: $("tune-benchmark").checked,
+    fresh: $("tune-fresh").checked, cross_hardware: $("tune-cross-hardware").checked,
+    cross_objective: $("tune-cross-objective").checked,
   };
   const r = await fetch("tune/run", { method: "POST", headers: headers(true), body: JSON.stringify(body) });
   renderTuneStatus(await r.json());

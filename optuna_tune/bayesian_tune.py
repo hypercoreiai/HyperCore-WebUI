@@ -716,7 +716,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="hold the prompt chunk at this value instead of searching it. Plain "
                         "auto is capped at 8192 by the engine (generate.cpp:1782-1790); "
                         "auto:N raises it, and N above 32768 is clamped to 32768.")
-    p.add_argument("--engine", default=str(root / "engine" / "hypercore"))
+    p.add_argument("--engine", default=str(root / "engine" / "strata"))
     p.add_argument("--pack", default=None)
     p.add_argument("--native", default=None)
     p.add_argument("--ple-gguf", default=None)

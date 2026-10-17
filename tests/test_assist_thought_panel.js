@@ -7,8 +7,9 @@
 "use strict";
 const fs = require("fs");
 
-const SRC = fs.readFileSync(__dirname + "/app.js", "utf8");
-const PAGE_SRC = fs.readFileSync(__dirname + "/index.html", "utf8");
+const WEB = __dirname + "/../serve/web";
+const SRC = fs.readFileSync(WEB + "/app.js", "utf8");
+const PAGE_SRC = fs.readFileSync(WEB + "/index.html", "utf8");
 
 function sourceOf(name) {
   const start = SRC.indexOf("function " + name + "(");
