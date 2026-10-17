@@ -3,7 +3,9 @@ engine/*
 !engine/.gitkeep
 tmp/
 logs/
-data/
+data/*
+!data/media/
+!data/media/*.png
 .venv/
 __pycache__/
 *.pyc
@@ -28,3 +30,7 @@ config/run-*.sh
 
 # Runtime logs the app writes to itself.
 serve/assist_calls.jsonl
+
+# The MCP test loop's own progress file. It is this machine's working state, not
+# part of the project.
+.mcp_test_state.json

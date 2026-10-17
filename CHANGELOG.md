@@ -35,6 +35,18 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   i9-14900KF / RTX 4090 box are committed (228 KB); the Tune tab lists what run data a
   sweep would load and whether it matches this machine, with boxes for "start cold",
   "use priors from other hardware" and "reuse priors from other objectives".
+- **Chat archiving**: the composer has a second save button. The download button
+  writes the Markdown to the browser's downloads folder as before; the archive
+  button posts the same transcript to `POST /history/archive`, which writes it into
+  `data/history/_old_chats/` beside the transcripts the history builder reads
+  (`serve/chat_archive.py`, `HYPERCORE_OLD_CHATS` to point it elsewhere).
+- **Tool call cap**: `mcp.max_tool_calls` (default 500) bounds the tool calls a single
+  request may run. `mcp.max_rounds` bounds the assistant turns that may emit calls, and
+  one turn can emit several calls, so the round cap alone is not a call cap. Calls past
+  the cap are closed as "not run" and the turn ends; the chat line now names the cap that
+  was actually hit and how many calls ran.
 - **Windows**: `run.bat`, `setup.bat`, `tools/build_engine.bat`.
 - **Tests**: `tools/run_tests.sh` runs the pytest suite and the browser-free JS
   checks that read `serve/web/app.js` as text.
+- **README**: each tab is described and then shown, with the screenshots in
+  `data/media/` (the only files under `data/` that are committed).

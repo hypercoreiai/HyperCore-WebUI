@@ -12,16 +12,141 @@ runtime is `engine/strata`.
 
 ---
 
-## What it is
+## The tabs
 
-| Tab | What it does |
+Six views, in the order they sit in the header: **Chat, Assist, Monitor, Tune, Build, About**.
+Each is described first, then shown. The screenshots are the files in `data/media/`.
+
+| Tab | In one line |
 |---|---|
-| **Chat** | OpenAI/Anthropic chat over the engine, streaming, thinking, agent profiles, attachments, images, MCP tools |
-| **Assist** | A second chat through any OpenAI-compatible endpoint, with a lag-probed model list |
-| **Monitor** | Live engine and hardware metrics, request table, conversation cache, MCP switches |
-| **Tune** | Runs `optuna_tune/max_tune.sh` in the background and reports the sweep and the winner's benchmark |
-| **Build** | Version check against Niko1221/Strata, ready-made download or a from-source build with dropdowns read from the release itself |
-| **About** | Engine provenance, this PC, API addresses, model settings |
+| **Chat** | The model, on this PC: streaming answers, thinking, agent profiles, attachments, MCP tools |
+| **Assist** | A second chat through an external OpenAI-compatible endpoint, with a lag-probed model list |
+| **Monitor** | Live engine and hardware metrics, the request table, the conversation cache, the MCP switches |
+| **Tune** | An Optuna sweep over the engine's settings, run as a subprocess and reported here |
+| **Build** | Check for a new Strata release, get it ready-made or build it from source |
+| **About** | Engine provenance, this PC, the API addresses, the API key, the model settings |
+
+### Chat
+
+**What it does.** OpenAI and Anthropic chat over the engine that is resident on this machine.
+Nothing leaves it unless you use Assist.
+
+- **Streaming with thinking.** The answer arrives token by token; the reasoning block is
+  shown expanded while it streams and collapsed afterwards, and it is kept in the saved
+  transcript.
+- **Attachments.** Text files attach through the paperclip, by dropping them on the chat or
+  pasting them. Pictures go through the vision model when the run config has a `vision`
+  entry.
+- **Agent profiles.** The picker is built at run time from the top-level keys of
+  `prompts/prompt.json`; anything that is not `system_prompt` is a profile.
+- **Sampling and thinking.** The drawer sets thinking level, temperature, top-p, top-k,
+  max tokens, the context cap, the seed, whether thinking is shown, whether MCP tools are
+  offered, and the page surface. The surface is a browser setting and is never sent to the
+  server.
+- **Two ways out of a chat.** The download button writes the transcript to the browser's
+  downloads folder; the archive button posts it to `POST /history/archive`, which writes it
+  into `data/history/_old_chats/` for `tools/build_history.py` to distil.
+- **Stop and Start.** One button, two states. While an answer is being written it is Stop;
+  once a turn has ended it becomes Start, which types "Complete the open tasks" into the
+  composer and sends it, so a chat that stopped mid-work picks up without you writing
+  anything.
+- **Context.** A request larger than the window is condensed before it reaches the engine,
+  never silently cut.
+
+![The Chat tab: the transcript above the composer, with the attachment, new chat, download, archive, agent-profile and sampling controls](data/media/chat_1.png)
+
+### Assist
+
+**What it does.** A second chat, through an external OpenAI-compatible endpoint rather than
+the local engine. The endpoint and key are read from `.env`.
+
+- **Model picker.** A folded panel that says in its summary which model is answering, so it
+  can be closed without losing that.
+- **Lag probing.** "Check lag" times every model the endpoint will serve and keeps the ones
+  under the limit; "Show every model" lists the rest with the reason each was left out.
+- **The call is logged.** Every Assist request is appended to `serve/assist_calls.jsonl`,
+  which the Monitor shows.
+- **Nothing is stored server-side.** Assist keeps no conversation cache; the turns are held
+  in this browser.
+
+![The Assist tab: the folded model picker above the composer, with the lag check and the probe results](data/media/assist_2.png)
+
+### Monitor
+
+**What it does.** The engine and the machine, live. `/metrics` is the source; the page is
+rendered from it.
+
+- **Model state.** Idle, Reading, Generating, Queued or Error, with a progress bar for the
+  request in flight.
+- **Metric cards.** Speed (tok/s), GPU load, VRAM, GPU temperature, power, PCIe, CPU and
+  disk read, each with a sparkline of the last few minutes.
+- **Context fill.** A gauge of how much of the window the current prompt uses, plus bars for
+  experts resident in VRAM, system RAM and GPU temperature.
+- **Recent requests.** Time, status, prompt size, prompt reused, output tokens, tok/s, VRAM
+  hit rate and duration, with "Show all" for everything kept.
+- **Conversation cache.** Parked conversations, their memory in RAM, and what was restored
+  or evicted.
+- **MCP servers.** Each server, its status and its tools. A switch turns that server off
+  without reloading the model.
+- **External assistants.** The Assist calls and the pinned model list.
+
+![The Monitor tab, first view](data/media/monitor_3.a.png)
+
+![The Monitor tab, second view](data/media/monitor_3.b.png)
+
+### Tune
+
+**What it does.** Runs `optuna_tune/bayesian_tune.py` as a subprocess and reports the sweep
+here. The chat engine is unloaded first, because a sweep boots its own engine and needs the
+GPU.
+
+- **The sweep.** Model, objective (generation tok/s, prefill tok/s, latency, balance),
+  context length, trial count, sampler (TPE, GP, random) and mode (joint or staged), with
+  VRAM min/max and a PCIe ceiling.
+- **Pins.** Any dimension can be pinned so the search goes around it instead of across it.
+- **Priors.** Run data already measured on this machine seeds the search. The panel lists
+  what a sweep would load and whether it matches this hardware; priors from other hardware
+  or other objectives have to be ticked on before they are used.
+- **Results.** A progress bar, the winner's configuration, a row per trial with its
+  measurements, and an export of the run config pair.
+
+**Do not close the page while a tune is running.** The subprocess writes the results to
+disk and the tab reports them when it exits.
+
+![The Tune tab: the sweep form, the pins, the priors list and the results table](data/media/tune_4.png)
+
+### Build
+
+**What it does.** Gets the engine. It does not need an internet connection to know what is
+installed, only to find a new release.
+
+- **Installed version** read from `engine/BUILD.json` or from the string compiled into the
+  binary.
+- **Releases** pulled from the GitHub releases API for Niko1221/Strata: install the
+  ready-made archive for this OS (its published SHA-256 is verified), or clone and build
+  from source.
+- **Build options** are extracted from the cloned release's own `CMakeLists.txt` and
+  `setup.py`, not from a list this project maintains, and diffed against the previous
+  manifest so a new release's new options appear here automatically.
+- **Build log** streams while the compile runs. `tmp/` holds one clone and is deleted when
+  the build finishes.
+
+![The Build tab: installed version, the release picker, the build options and the log](data/media/build_5.png)
+
+### About
+
+**What it does.** Everything you would otherwise have to ask the server about.
+
+- **Model and engine**: which model is loaded, which engine binary is running, and where it
+  came from.
+- **This PC**: GPU, driver, RAM, CPU, and the context the model is running with.
+- **Connect your tools**: the OpenAI- and Anthropic-compatible addresses this server answers.
+- **Settings**: the API key (only needed if the server was started with one), the dark theme
+  toggle. Chats, settings and the key stay in this browser.
+- **Model settings**: the documented keys of the run config, written for every client. An
+  empty field is the default, and a change takes effect the next time the model starts.
+
+![The About tab: engine provenance, this PC, the API addresses and the settings](data/media/about_6.png)
 
 ## Running it
 
@@ -125,19 +250,44 @@ measurement silently authoritative.
 not committed; the history file is the distilled form of it.
 
 
+## Keeping the history
+
+The Chat tab's archive button writes a transcript to `data/history/_old_chats/`. That is the
+input, not the output. `tools/build_history.py` distils it in three steps:
+
+```bash
+python3 tools/build_history.py            # transcripts -> chats/ -> topics/ -> notes/
+python3 tools/build_history.py --topics   # counts only, writes nothing
+```
+
+- `chats/<date>-<name>.md` - one transcript: what was asked, what came of it.
+- `topics/<topic>.md` - every fact, decision, measurement, warning and open item about a
+  topic, grouped by the thing it is about, dated and attributed.
+- `notes/<topic>.md` - the current state of a topic, hand-maintained and kept by the builder.
+
+The extraction is deterministic and does not depend on which chat said something: a sentence
+is kept only when it names something concrete (a file, a flag, an identifier, a number with a
+unit) and states a fact about it. Keys and addresses are replaced with markers, paths written
+against an older project name are rewritten to the ones that exist here, and restatements of
+the same finding are merged with every source kept as provenance.
+
 ## Layout
 
 ```
 serve/          the web app and its server
+  web/          index.html, app.js, monitor.js, the styles and the icon sprite
 optuna_tune/    the Bayesian tuner
   history/      run data keyed to this machine; seed-* priors are committed
   results/      raw sweep logs and CSVs (not committed)
-tools/          the build-option extractor, the priors importer and the build script
+tools/          build_engine.sh, extract_build_options.py, import_tune_history.py,
+                run_tests.sh and build_history.py
 engine/         the engine binaries (not committed)
 engine-src/     the HyperCore process boundary injected into a Strata clone
 config/         run configs and the build manifest
 prompts/        the agent profiles
-data/ logs/ tmp/  local, gitignored
+data/media/     the screenshots in this README
+data/history/   the chat archive and the distilled topic files (local)
+logs/ tmp/      local
 ```
 
 Nothing loose sits in the repository root.
