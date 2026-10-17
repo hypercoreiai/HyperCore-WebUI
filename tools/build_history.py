@@ -36,8 +36,18 @@ import os
 import re
 import sys
 from collections import defaultdict
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _built_stamp() -> str:
+    """The date the output files carry, in UTC.
+
+    A bare local date reads as a different day on a machine in another zone, and the
+    topic headers and index.json are compared against the transcripts' own dates.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
 
 # Transcript folders, read in the order given.
 #
@@ -579,9 +589,9 @@ def main() -> int:
         title = TOPICS[topic][0]
         ensure_notes(notes_dir, topic, items)
         body = [f"# {title}\n",
-                f"Accumulated from {len({i['source'] for i in items})} transcripts, {len(items)} entries. "
-                f"Built {date.today()}. Newer chats append here; within a section the entries are "
-                "grouped by the thing they are about, newest statement first.\n"]
+                (f"Accumulated from {len({i['source'] for i in items})} transcripts, {len(items)} entries. "
+                f"Built {_built_stamp()}. Newer chats append here; within a section the entries are "
+                "grouped by the thing they are about, newest statement first.\n")]
         note = notes_dir / f"{topic}.md"
         if note.is_file():
             text = scrub(note.read_text(encoding="utf-8").strip())
@@ -611,8 +621,8 @@ def main() -> int:
             fn = f"{fn[:-3]}-{Path(s['folder']).name}.md"
         used.add(fn)
         body = [f"# {name}\n",
-                f"{s['date']} · {s['size_kb']} KB · {s['requests']} requests · topics: "
-                f"{', '.join(s['topics']) or 'nothing worth keeping'}\n",
+                (f"{s['date']} · {s['size_kb']} KB · {s['requests']} requests · topics: "
+                f"{', '.join(s['topics']) or 'nothing worth keeping'}\n"),
                 "## What was asked"]
         body += [f"- {q}" for q in s["asks"]]
         body.append("\n## What came of it")
@@ -620,7 +630,7 @@ def main() -> int:
         (HIST / "chats" / fn).write_text("\n".join(body) + "\n", encoding="utf-8")
 
     (HIST / "index.json").write_text(json.dumps({
-        "built": str(date.today()), "transcripts": len(sources),
+        "built": _built_stamp(), "transcripts": len(sources),
         "source_folders": [str(s) for s in SOURCES],
         "categories": {t: TOPICS[t][0] for t in TOPICS},
         "topics": {t: len(v) for t, v in sorted(entries.items())},
@@ -634,41 +644,41 @@ def main() -> int:
     (HIST / "sources.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     readme = ["# data/history: the accumulated development state\n",
-             "What was learned across the chat transcripts, distilled by topic instead of by chat. "
+             ("What was learned across the chat transcripts, distilled by topic instead of by chat. "
              "A new chat appends to the topics it touched; nothing has to be re-read from the raw "
-             "transcripts to know the current state.\n",
+             "transcripts to know the current state.\n"),
              "## The pipeline, in order",
-             "1. `_old_chats/*.md` - the raw transcripts. The Chat tab's \"Save to history\" button "
-             "writes here (serve/chat_archive.py), so the archive is the input, not the output.",
+             ("1. `_old_chats/*.md` - the raw transcripts. The Chat tab's \"Save to history\" button "
+             "writes here (serve/chat_archive.py), so the archive is the input, not the output."),
              "2. `chats/<date>-<name>.md` - one transcript distilled: what was asked, what came of it.",
-             "3. `topics/<topic>.md` - every fact, decision, measurement, warning and open item about "
-             "a topic, grouped by the thing it is about, each dated and attributed.",
-             "4. `notes/<topic>.md` - the current state of that topic, hand-maintained, kept by the "
-             "builder and inserted at the top of the topic file.",
-             "5. `index.json` and `sources.md` - the machine-readable index and the reverse index, "
-             "category by transcript.",
+             ("3. `topics/<topic>.md` - every fact, decision, measurement, warning and open item about "
+             "a topic, grouped by the thing it is about, each dated and attributed."),
+             ("4. `notes/<topic>.md` - the current state of that topic, hand-maintained, kept by the "
+             "builder and inserted at the top of the topic file."),
+             ("5. `index.json` and `sources.md` - the machine-readable index and the reverse index, "
+             "category by transcript."),
              "\n## Why the extraction is agnostic",
-             "- A sentence is kept only when it names something concrete (a file, a flag, an "
+             ("- A sentence is kept only when it names something concrete (a file, a flag, an "
              "identifier, a number with a unit) and states a fact about it. Thinking out loud, "
-             "questions and tool output are dropped: the working is not the finding.",
-             "- API keys, account addresses and handles are replaced with markers before anything is "
-             "read, so the history can be shared without leaking a secret or a person.",
-             "- Every path is rewritten to the one that is actually reachable from this repository, "
-             "so a fact learned under an old project name is still applicable.",
-             "- Restatements of the same finding are merged into one entry, newest wording kept, with "
-             "every transcript that said it retained as provenance.",
+             "questions and tool output are dropped: the working is not the finding."),
+             ("- API keys, account addresses and handles are replaced with markers before anything is "
+             "read, so the history can be shared without leaking a secret or a person."),
+             ("- Every path is rewritten to the one that is actually reachable from this repository, "
+             "so a fact learned under an old project name is still applicable."),
+             ("- Restatements of the same finding are merged into one entry, newest wording kept, with "
+             "every transcript that said it retained as provenance."),
              "- Identical transcripts found in more than one source folder are read once.",
              "\n## Path aliases the builder applies",
-             "A transcript written against an older tree names paths this checkout does not "
+             ("A transcript written against an older tree names paths this checkout does not "
              "have. Each alias is rewritten to the directory that is actually reachable here; "
-             "anything not in the table is only made absolute.",
+             "anything not in the table is only made absolute."),
              "\n".join(f"- `{alias}` -> {target}" for alias, target in sorted(ALIASES.items())),
-             "\n`_old_chats` is the archive the Chat tab writes to; the engine and its model "
+             ("\n`_old_chats` is the archive the Chat tab writes to; the engine and its model "
              "data are not another project, they are what this project runs, so their paths are "
-             "kept and made absolute.",
+             "kept and made absolute."),
              "\n## Layout",
-             "- `topics/<topic>.md` - one file per category; entries are dated, attributed, and "
-             "grouped by the thing they are about",
+             ("- `topics/<topic>.md` - one file per category; entries are dated, attributed, and "
+             "grouped by the thing they are about"),
              "- `notes/<topic>.md` - the hand-written current state, inserted at the top of each topic",
              "- `chats/<date>-<name>.md` - one file per transcript: what was asked, what came of it",
              "- `index.json` - the machine-readable version of both",
@@ -677,13 +687,13 @@ def main() -> int:
              "\n".join(f"- `topics/{t}.md` - {TOPICS[t][0]} ({len(v)} entries)"
                        for t, v in sorted(entries.items(), key=lambda kv: -len(kv[1]))),
              "\n## Rebuild",
-             "```bash\npython3 tools/build_history.py            # from the default transcript trees\n"
+             ("```bash\npython3 tools/build_history.py            # from the default transcript trees\n"
              "python3 tools/build_history.py --topics           # counts only, writes nothing\n"
              "python3 tools/build_history.py --source a,b       # read two folders in one pass\n"
-             "python3 tools/build_history.py --out /path/to/history\n```\n",
-             "The extraction is deterministic: the transcripts are the source of truth. Anything added "
+             "python3 tools/build_history.py --out /path/to/history\n```\n"),
+             ("The extraction is deterministic: the transcripts are the source of truth. Anything added "
              "by hand to a topic file is lost on a rebuild; the current state lives in "
-             "`notes/<topic>.md`, which the builder reads and keeps.",
+             "`notes/<topic>.md`, which the builder reads and keeps."),
              ""]
     (HIST / "README.md").write_text("\n".join(readme) + "\n", encoding="utf-8")
     print(f"{len(sources)} transcripts -> {len(entries)} categories, "
