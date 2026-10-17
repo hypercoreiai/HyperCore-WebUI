@@ -43,6 +43,19 @@ PY = sys.executable
 FAKE_TOOLS = ["add", "big", "die", "echo", "fail", "sleep"]
 
 
+def shipped_yaml() -> Path:
+    """The MCP config this project ships, found the same way the server finds it.
+
+    `mcp.yaml` beside the server first, then `config/mcp.yaml`. A test that hard-codes
+    one of the two breaks the moment the file is moved, which is exactly what happened
+    when the shipped config went into `config/`.
+    """
+    for candidate in (REPO / "mcp.yaml", REPO / "config" / "mcp.yaml"):
+        if candidate.is_file():
+            return candidate
+    return REPO / "mcp.yaml"
+
+
 def stdio(*args, **env) -> dict:
     return {"command": PY, "args": [FAKE, *args], "env": env}
 
@@ -96,7 +109,7 @@ class Config(unittest.TestCase):
 
     @case(SERVER, "yaml", "mcp.yaml is parsed into servers and settings")
     def test_hub__yaml_parses_the_shipped_file(self):
-        data = parse_mcp_yaml((REPO / "mcp.yaml").read_text(encoding="utf-8-sig"))
+        data = parse_mcp_yaml(shipped_yaml().read_text(encoding="utf-8-sig"))
         self.assertIn("web", data["servers"])
         self.assertIn("terminal", data["servers"])
         self.assertGreater(data["max_result_chars"], 0)
@@ -234,13 +247,18 @@ servers:
 
     @case(SERVER, "yaml", "the shipped mcp.yaml registers every server it ships")
     def test_hub__shipped_yaml(self):
-        hub = hub_from_config({}, yaml_path=str(REPO / "mcp.yaml"))
+        path = str(shipped_yaml())
+        hub = hub_from_config({}, yaml_path=path)
         self.assertIsNotNone(hub)
         self.assertEqual(sorted(hub.servers),
                          ["assist", "browser", "docs", "home", "scrape", "terminal", "web"])
-        _, settings = load_mcp_yaml(str(REPO / "mcp.yaml"))
+        _, settings = load_mcp_yaml(path)
         for key, value in settings.items():
             self.assertEqual(hub.settings[key], value)
+        # the caps the project ships, checked against the file rather than against DEFAULTS,
+        # so a change to the shipped config is caught here and not silently accepted
+        self.assertEqual(hub.settings["max_rounds"], 500)
+        self.assertEqual(hub.settings["max_tool_calls"], 500)
 
 
 class Hub(unittest.TestCase):
