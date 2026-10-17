@@ -260,6 +260,13 @@ python3 tools/build_history.py            # transcripts -> chats/ -> topics/ -> 
 python3 tools/build_history.py --topics   # counts only, writes nothing
 ```
 
+Archiving a chat runs that rebuild by itself, in a background thread, so the button does not
+wait for it. Two archives in the same minute start one rebuild, not two. `GET /history/distil`
+reports whether a rebuild is running and what the last one returned; `POST /history/distil`
+runs one now and returns the result. `HYPERCORE_AUTO_DISTIL=0` turns the automatic pass off
+and leaves the archive button as a plain save; `HYPERCORE_DISTIL_SCRIPT` points the hook at a
+builder kept elsewhere.
+
 - `chats/<date>-<name>.md` - one transcript: what was asked, what came of it.
 - `topics/<topic>.md` - every fact, decision, measurement, warning and open item about a
   topic, grouped by the thing it is about, dated and attributed.

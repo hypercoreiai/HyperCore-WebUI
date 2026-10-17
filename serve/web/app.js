@@ -1715,7 +1715,12 @@ $("archive-btn").onclick = async () => {
       return;
     }
     if (!res.ok) throw new Error((out.error && out.error.message) || `the server said ${res.status}`);
-    toast("success", "Chat archived", out.path || out.name, 6000);
+    // The transcript is on disk. The distillation into chats/, topics/ and notes/
+    // runs behind this response, so say what it did rather than imply it is finished.
+    let detail = out.path || out.name;
+    if (out.distil && out.distil.queued) detail += " - the topic files are being rebuilt from it";
+    else if (out.distil && out.distil.reason) detail += " - " + out.distil.reason;
+    toast("success", "Chat archived", detail, 6000);
   } catch (e) {
     toast("error", "Could not archive the chat", e.message || String(e), 6000);
   } finally {

@@ -8,11 +8,22 @@ tools/build_history.py run picks the chat up.
 
 Naming follows the files already in that folder: YYYY-MM-DD-HH-MM-<slug>.md.
 Nothing is ever overwritten - a second chat in the same minute gets -2, -3.
+
+Saving a chat also runs the standing task the system prompt carries: the archived
+transcript is distilled into data/history/chats/, topics/ and notes/.  That is a
+tens-of-seconds pass over every transcript, so it is not done inside the request.
+queue_distil() starts it in a daemon thread and returns at once; a second archive
+while one is running does not start a second.  GET /history/distil reports the
+state, POST /history/distil runs it now.  HYPERCORE_AUTO_DISTIL=0 turns the
+automatic pass off and leaves the button as a plain save.
 """
 from __future__ import annotations
 
 import os
 import re
+import subprocess
+import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,3 +87,65 @@ def archive_chat(chat: str, title: str = "", directory: Path | None = None,
 
     path.write_text(chat.rstrip("\n") + "\n", encoding="utf-8")
     return {"path": str(path), "name": name, "bytes": path.stat().st_size, "new": new}
+
+
+# ---------------------------------------------------------------- distil the archive
+DISTIL_SCRIPT = Path(os.environ.get("HYPERCORE_DISTIL_SCRIPT") or ROOT / "tools" / "build_history.py")
+_DISTIL_TIMEOUT = os.environ.get("HYPERCORE_DISTIL_TIMEOUT_S")
+DISTIL_TIMEOUT_S = float(_DISTIL_TIMEOUT) if _DISTIL_TIMEOUT else 180.0
+AUTO_DISTIL = os.environ.get("HYPERCORE_AUTO_DISTIL", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+_distil_lock = threading.Lock()
+_distil_state: dict[str, object] = {"running": False, "last": None}
+
+
+def run_builder() -> dict[str, object]:
+    """Distil every transcript now, in this process, and report what the builder said.
+
+    Returns {"ok", "output", "error", "seconds", "started", "script"}.  A missing
+    builder is a result, not an exception: an archive must still succeed.
+    """
+    started = datetime.now(timezone.utc)
+    if not DISTIL_SCRIPT.is_file():
+        result = {"ok": False, "error": f"the history builder is not at {DISTIL_SCRIPT}", "output": ""}
+    else:
+        try:
+            proc = subprocess.run([sys.executable, str(DISTIL_SCRIPT)], cwd=str(ROOT),
+                                  capture_output=True, text=True, timeout=DISTIL_TIMEOUT_S, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result = {"ok": False, "error": str(exc), "output": ""}
+        else:
+            out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+            result = {"ok": proc.returncode == 0,
+                      "output": out[-400:],
+                      "error": None if proc.returncode == 0 else out[-400:] or f"builder exit {proc.returncode}"}
+    result.update({"started": started.isoformat(timespec="seconds"),
+                   "seconds": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
+                   "script": str(DISTIL_SCRIPT)})
+    return result
+
+
+def _distil_and_record() -> None:
+    result = run_builder()
+    with _distil_lock:
+        _distil_state["running"] = False
+        _distil_state["last"] = result
+
+
+def queue_distil() -> dict[str, object]:
+    """Start the rebuild in the background. The archive response does not wait for it."""
+    if not AUTO_DISTIL:
+        return {"queued": False, "reason": "automatic distillation is off (HYPERCORE_AUTO_DISTIL=0)"}
+    with _distil_lock:
+        if _distil_state["running"]:
+            return {"queued": False, "reason": "a rebuild is already running"}
+        _distil_state["running"] = True
+    threading.Thread(target=_distil_and_record, daemon=True).start()
+    return {"queued": True, "reason": "the transcript files are being rebuilt"}
+
+
+def distil_status() -> dict[str, object]:
+    """Whether a rebuild is running, and the result of the last one."""
+    with _distil_lock:
+        return {"auto": AUTO_DISTIL, "running": bool(_distil_state["running"]),
+                "last": _distil_state["last"], "script": str(DISTIL_SCRIPT)}

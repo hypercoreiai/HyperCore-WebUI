@@ -1,8 +1,9 @@
 """tests/test_chat_archive.py - the Chat tab's "Save to history" writer.
 
 serve/chat_archive.py is the only code that touches data/history/_old_chats/, so
-these tests cover the naming, the collisions, and the refusals. Nothing here
-needs a GPU or a server.
+these tests cover the naming, the collisions, the refusals, and the distillation
+hook that runs tools/build_history.py behind an archive. Nothing here needs a GPU
+or a real model.
 """
 import json
 import os
@@ -17,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from serve import chat_archive
 from serve.chat_archive import MAX_CHAT_CHARS, OLD_CHATS_DIR, archive_chat
 
 STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-.+\.md$")
@@ -109,7 +111,10 @@ class ServerRouteTests(unittest.TestCase):
         import urllib.request
 
         port = self._free_port()
-        env = dict(os.environ, HYPERCORE_OLD_CHATS=str(self.tmp))
+        stub = self.tmp / "distil_stub.py"
+        stub.write_text("print('distil ok: stub builder')\n", encoding="utf-8")
+        env = dict(os.environ, HYPERCORE_OLD_CHATS=str(self.tmp),
+                   HYPERCORE_DISTIL_SCRIPT=str(stub))
         proc = subprocess.Popen([sys.executable, "-m", "serve.server", "--engine", "mock", "--port", str(port)],
                                 cwd=str(ROOT), env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -134,6 +139,22 @@ class ServerRouteTests(unittest.TestCase):
             self.assertTrue(Path(out["path"]).exists())
             self.assertTrue(out["name"].startswith("20"), out["name"])
             self.assertEqual(Path(out["path"]).read_text(encoding="utf-8"), "## You\n\narchive me\n")
+            # the archive is written, the rebuild is started behind the response
+            self.assertIn("distil", out, "the archive response says nothing about the rebuild")
+            self.assertTrue(out["distil"].get("queued"), out["distil"])
+
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/history/distil", timeout=10) as r:
+                status = json.loads(r.read())
+            self.assertEqual(r.status, 200, status)
+            self.assertTrue(status["auto"], "the status does not report the automatic pass")
+            deadline = time.time() + 15
+            while time.time() < deadline and status["running"]:
+                time.sleep(0.2)
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/history/distil", timeout=10) as r:
+                    status = json.loads(r.read())
+            self.assertFalse(status["running"], "the rebuild never finished")
+            self.assertTrue(status["last"]["ok"], status["last"])
+            self.assertIn("distil ok", status["last"]["output"])
 
             bad = urllib.request.Request(f"http://127.0.0.1:{port}/history/archive",
                                         data=b'{"chat": ""}', headers={"Content-Type": "application/json"})
@@ -145,6 +166,80 @@ class ServerRouteTests(unittest.TestCase):
         finally:
             proc.terminate()
             proc.wait(timeout=10)
+
+
+class DistilHookTests(unittest.TestCase):
+    """The standing task behind the archive button: distil, but never inside the request."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.stub = self.tmp / "distil_stub.py"
+        self.stub.write_text("print('distil ok: 3 transcripts')\n", encoding="utf-8")
+        self._script = chat_archive.DISTIL_SCRIPT
+        self._auto = chat_archive.AUTO_DISTIL
+        chat_archive.DISTIL_SCRIPT = self.stub
+        self._settle()
+
+    def tearDown(self) -> None:
+        self._settle()
+        chat_archive.DISTIL_SCRIPT = self._script
+        chat_archive.AUTO_DISTIL = self._auto
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _settle(self) -> None:
+        for _ in range(120):
+            if not chat_archive.distil_status()["running"]:
+                return
+            time.sleep(0.1)
+        self.fail("a queued rebuild never finished")
+
+    def test_the_builder_the_hook_runs_by_default_is_in_the_repository(self) -> None:
+        self.assertTrue((ROOT / "tools" / "build_history.py").is_file())
+        self.assertTrue(chat_archive.AUTO_DISTIL, "the automatic pass should be on by default")
+
+    def test_run_builder_runs_it_and_reports_the_result(self) -> None:
+        out = chat_archive.run_builder()
+        self.assertTrue(out["ok"], out)
+        self.assertIn("distil ok", out["output"])
+        self.assertIsNone(out["error"])
+        self.assertGreaterEqual(out["seconds"], 0.0)
+        self.assertEqual(out["script"], str(self.stub))
+        self.assertTrue(out["started"].startswith("20"), out["started"])
+
+    def test_a_missing_builder_is_a_result_not_an_exception(self) -> None:
+        chat_archive.DISTIL_SCRIPT = self.tmp / "not-there.py"
+        out = chat_archive.run_builder()
+        self.assertFalse(out["ok"])
+        self.assertIn("not at", out["error"])
+
+    def test_two_archives_do_not_start_two_rebuilds(self) -> None:
+        slow = self.tmp / "slow.py"
+        slow.write_text("import time\nprint('sleeping')\ntime.sleep(2)\n", encoding="utf-8")
+        chat_archive.DISTIL_SCRIPT = slow
+        first = chat_archive.queue_distil()
+        self.assertTrue(first["queued"], first)
+        second = chat_archive.queue_distil()
+        self.assertFalse(second["queued"], "a second rebuild started while one was running")
+        self.assertIn("already running", second["reason"])
+        self._settle()
+        last = chat_archive.distil_status()["last"]
+        self.assertTrue(last and last["ok"], last)
+
+    def test_auto_distil_off_leaves_the_archive_as_a_plain_save(self) -> None:
+        chat_archive.AUTO_DISTIL = False
+        out = chat_archive.queue_distil()
+        self.assertFalse(out["queued"])
+        self.assertIn("HYPERCORE_AUTO_DISTIL", out["reason"])
+        self.assertFalse(chat_archive.distil_status()["running"])
+
+    def test_archiving_queues_the_rebuild(self) -> None:
+        written = archive_chat("## You\n\narchive me\n", "hook", self.tmp, NOW)
+        self.assertTrue(Path(written["path"]).exists())
+        queued = chat_archive.queue_distil()
+        self.assertTrue(queued["queued"], queued)
+        self._settle()
+        self.assertTrue(chat_archive.distil_status()["last"]["ok"])
 
 
 if __name__ == "__main__":

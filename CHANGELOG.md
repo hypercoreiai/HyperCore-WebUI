@@ -39,7 +39,13 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   writes the Markdown to the browser's downloads folder as before; the archive
   button posts the same transcript to `POST /history/archive`, which writes it into
   `data/history/_old_chats/` beside the transcripts the history builder reads
-  (`serve/chat_archive.py`, `HYPERCORE_OLD_CHATS` to point it elsewhere).
+  (`serve/chat_archive.py`, `HYPERCORE_OLD_CHATS` to point it elsewhere). Archiving
+  then starts `tools/build_history.py` in a daemon thread, so the transcript is
+  distilled into `chats/`, `topics/` and `notes/` without the button waiting for it;
+  a second archive while a rebuild is running does not start another. `GET
+  /history/distil` reports the state, `POST /history/distil` runs one now,
+  `HYPERCORE_AUTO_DISTIL=0` turns the automatic pass off and `HYPERCORE_DISTIL_SCRIPT`
+  points the hook at a builder kept elsewhere.
 - **Tool call cap**: `mcp.max_tool_calls` (default 500) bounds the tool calls a single
   request may run. `mcp.max_rounds` bounds the assistant turns that may emit calls, and
   one turn can emit several calls, so the round cap alone is not a call cap. Calls past

@@ -3751,6 +3751,10 @@ def make_handler(svc: Service):
                 if self._authorized():
                     self._config_get()
                 return
+            if path == "/history/distil":                    # the state of the history rebuild
+                if self._authorized():
+                    self._json(200, chat_archive.distil_status())
+                return
             if path == "/mcp":
                 # the MCP servers, their state and tools (the web app's switch and Monitor card), plus
                 # the size of the tool block the template adds: the page needs it before it has a
@@ -4104,14 +4108,24 @@ def make_handler(svc: Service):
                     if not self._own_page("a chat can be written to the history folder"):
                         return
                     try:
-                        self._json(200, chat_archive.archive_chat(
+                        result = chat_archive.archive_chat(
                             str(req.get("chat") or req.get("text") or ""),
-                            str(req.get("title") or "")))
+                            str(req.get("title") or ""))
+                        # The archive is written; the distillation that turns it into topic
+                        # files runs behind the response, not inside it.
+                        result["distil"] = chat_archive.queue_distil()
+                        self._json(200, result)
                     except ValueError as e:
                         self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
                     except OSError as e:
                         self._json(500, {"error": {"type": "server_error",
                                                   "message": f"could not write the chat: {e}"}})
+                    return
+                if path == "/history/distil":                # rebuild the topic files now
+                    if not self._own_page("the history can be rebuilt"):
+                        return
+                    result = chat_archive.run_builder()
+                    self._json(200 if result["ok"] else 500, result)
                     return
                 if path == "/assist/models/probe":           # re-time the endpoint and rewrite the pinned list
                     try:

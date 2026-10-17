@@ -115,7 +115,8 @@ const click = els["archive-btn"].onclick;
     { role: "assistant", text: "done", reasoning: "thinking hard",
       tools: [{ name: "docs__edit_file", server: "docs", ok: true, result: "2 edits", arguments: { path: "a.py" } }] },
   );
-  canned.push({ ok: true, json: { path: "/tmp/history/_old_chats/2026-01-01-00-00-archive-this-please.md", name: "x.md" } });
+  canned.push({ ok: true, json: { path: "/tmp/history/_old_chats/2026-01-01-00-00-archive-this-please.md",
+                                 name: "x.md", distil: { queued: true, reason: "rebuilding" } } });
   await click();
   check(posts.length === 1, "the chat was not posted");
   const post = posts[0];
@@ -129,6 +130,15 @@ const click = els["archive-btn"].onclick;
   check(sent.chat.includes("<summary>Tool docs / docs__edit_file</summary>"), "the transcript is missing the tool call");
   check(sent.title === "Archive this please", "the title is not the first line of the first user turn");
   check(toasts[toasts.length - 1][0] === "success", "a successful archive is not reported as one");
+  check(toasts[toasts.length - 1][2].includes("topic files are being rebuilt"),
+        "the toast does not say the distillation was queued");
+
+  // the rebuild is already running: the toast says so instead of implying it started
+  posts.length = 0;
+  canned.push({ ok: true, json: { path: "/tmp/history/x.md", name: "x.md",
+                                 distil: { queued: false, reason: "a rebuild is already running" } } });
+  await click();
+  check(toasts[toasts.length - 1][2].includes("already running"), "the queued rebuild is not reported");
 
   // the server refuses
   posts.length = 0;
