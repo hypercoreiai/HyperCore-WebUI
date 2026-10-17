@@ -14,7 +14,7 @@ the prompt progress as if it were generated tokens.
 import threading
 import unittest
 
-from serve.direct_engine import DirectEngine, DirectEngineError
+from serve.direct_engine import DirectEngine, DirectEngineError, memory_short, missing_paths
 
 STUB = "tests/stub_engine.py"
 
@@ -68,6 +68,64 @@ class DirectEngineProtocol(unittest.TestCase):
     def test_a_missing_engine_is_reported_not_crashed(self):
         with self.assertRaises(DirectEngineError):
             DirectEngine("tests/no_such_engine", []).start()
+
+
+class RunConfigPreflight(unittest.TestCase):
+    """A path the config got wrong is said as a path, not as a memory problem.
+
+    ./run.sh with the template config produced:
+
+        [strata] the engine exited with code 2: ... memory guard: limit 30.5 GiB ...
+        the machine has no room for a second engine
+
+    when the only fault was /ABSOLUTE/PATH/TO/... in the config. The guard line is
+    printed whether or not it refused, so it cannot be matched as a keyword.
+    """
+
+    TEMPLATE = ["--pack", "/ABSOLUTE/PATH/TO/packs/q2_0",
+                "--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf",
+                "--ple-gguf", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00002-of-00002.gguf"]
+
+    def test_placeholder_paths_are_found_before_the_engine_is_spawned(self):
+        missing = missing_paths(self.TEMPLATE)
+        self.assertEqual([flag for flag, _ in missing], ["--pack", "--native", "--ple-gguf"])
+        self.assertTrue(all("ABSOLUTE" in path for _, path in missing))
+
+    def test_paths_that_exist_are_not_reported(self):
+        here = ["--pack", "config", "--native", "tests/run-stub.json"]
+        self.assertEqual(missing_paths(here), [])
+
+    def test_a_control_vector_weight_is_not_part_of_the_path(self):
+        missing = missing_paths(["--control-vector-scaled", "/no/such/projection.gguf:1.0"])
+        self.assertEqual(missing, [("--control-vector-scaled", "/no/such/projection.gguf")])
+
+    def test_starting_with_a_bad_path_names_the_path_and_does_not_spawn_the_engine(self):
+        engine = DirectEngine("tests/stub_engine.py", self.TEMPLATE)
+        with self.assertRaises(DirectEngineError) as got:
+            engine.start()
+        self.assertIn("--native /ABSOLUTE/PATH/TO", str(got.exception))
+        self.assertIsNone(engine.proc)
+
+    def test_a_satisfied_memory_guard_is_not_read_as_out_of_room(self):
+        ok = ["strata generate: memory guard: limit 30.5 GiB (source: meminfo), "
+              "current 2.3 GiB, reclaimable cache credited 0.0 GiB; available 28.3 GiB "
+              "(MemAvailable 28.3 GiB), floor 2560 MiB"]
+        self.assertFalse(memory_short(ok))
+
+    def test_a_refused_memory_guard_is(self):
+        full = ["strata generate: memory guard: limit 30.5 GiB (source: meminfo), "
+                "current 27.1 GiB; available 3.5 GiB (MemAvailable 3.5 GiB), floor 2560 MiB",
+                "strata generate: native embedding: cannot pin 260 MiB: out of memory"]
+        self.assertTrue(memory_short(full))
+
+    def test_a_missing_shard_is_blamed_on_the_config_not_on_ram(self):
+        engine = DirectEngine("tests/stub_engine.py", [])
+        hint = engine._hint(["strata generate: memory guard: limit 30.5 GiB, "
+                             "available 28.3 GiB (MemAvailable 28.3 GiB), floor 2560 MiB",
+                             "strata generate: --native /ABSOLUTE/PATH/TO/model.gguf: "
+                             "missing model shard (shard 1 of 2; is the download complete?)"])
+        self.assertIn("not on this machine", hint)
+        self.assertNotIn("no room for a second engine", hint)
 
 
 if __name__ == "__main__":

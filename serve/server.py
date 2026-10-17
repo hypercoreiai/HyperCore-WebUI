@@ -5266,6 +5266,10 @@ def main() -> int:
                     help="the address of an engine already running, e.g. http://127.0.0.1:8080 - the WebUI "
                          "attaches to it instead of starting a second copy of the model (also \"engine_url\" "
                          "in the config, and $HYPERCORE_ENGINE_URL)")
+    ap.add_argument("--no-attach", action="store_true",
+                    help="start this project's own engine even when one is already loaded elsewhere "
+                         "(by default the WebUI attaches to the engine it finds, rather than asking the "
+                         "machine to hold a second copy of the model)")
     ap.add_argument("--config", help="hypercore engine config (JSON: exe, args, cwd, tokenizer, model_name), "
                                      "written by setup.py")
     ap.add_argument("--host", default=None,
@@ -5353,10 +5357,13 @@ def main() -> int:
     attach_url = engine_url(cfg, a.engine_url)
     if a.engine == "attach" and not attach_url:
         ap.error("--engine attach needs --engine-url (or \"engine_url\" in the config, or $HYPERCORE_ENGINE_URL)")
-    if a.engine == "strata" and not attach_url and not engine_binary(cfg):
+    if not attach_url and not a.no_attach and a.engine in ("strata", "hypercore"):
         found = find_running_engine(cfg, a.port)
         if found:
-            print(f"[hypercore] no engine in engine/ - attaching to the one already running at {found}", flush=True)
+            why = "no engine in engine/" if not engine_binary(cfg) else "one engine per machine"
+            print(f"[hypercore] an engine is already loaded at {found} ({why}) - attaching to it "
+                  "instead of starting a second copy. Use --no-attach to start this project's own.",
+                  flush=True)
             attach_url = found
     if attach_url:
         # One engine per machine: the WebUI runs against the engine another server

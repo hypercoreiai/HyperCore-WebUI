@@ -41,14 +41,24 @@ The engine is found in this order: `--engine`, the run config's `"engine_url"`,
 ## One engine per machine
 
 A Strata engine is tens of GB. Two WebUIs on one PC cannot both hold it, so the
-second one attaches to the first instead of starting a second copy:
+second one attaches to the first instead of starting a second copy. This is
+automatic: before starting an engine the server asks the port the run config names
+(and the usual ones) for a `/health`, and attaches to whatever answers.
 
 ```bash
-HYPERCORE_ENGINE_URL=http://127.0.0.1:8080 ./run.sh
+./run.sh                                          # attaches to an engine already loaded
+./run.sh --no-attach                              # start this project's own engine anyway
+HYPERCORE_ENGINE_URL=http://127.0.0.1:8080 ./run.sh   # name the engine to attach to
 ```
 
 `run.sh` also checks the port before starting: if the WebUI is already up there, it
 opens that page rather than loading the model twice.
+
+Before an engine is spawned, the paths in the run config are checked. A model that
+is not on disk takes minutes of loading to say so, and the engine says it in the
+same breath as its memory guard, which reads as a RAM problem and is not one - so
+`missing_paths` reports the offending flags first, and the exit message tells a
+missing file as a missing file.
 
 Attaching goes through the OpenAI API the running engine's server already speaks.
 The prompt is decoded with the model's tokenizer, sent as one message, and every

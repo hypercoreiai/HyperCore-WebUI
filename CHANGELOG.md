@@ -13,7 +13,14 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   its OpenAI API, instead of starting a second copy of a tens-of-GB model.
   `serve/attached_engine.py` implements the same
   `generate(ids, max_new, sampling, cancel) -> token ids` boundary as the direct
-  engine, so no tab knows the difference.
+  engine, so no tab knows the difference. It is now automatic: before starting an
+  engine the server probes the port the run config names and attaches to whatever
+  answers. `--no-attach` forces a local engine.
+- **Run configs**: `config/run-example.json` is a template and is never picked by
+  accident; `run.sh`/`run.bat` skip it and say so when asked for it. Every path an
+  engine argument names is checked before the process is spawned, and an engine that
+  exits is reported in its own words - a missing model shard is called a missing
+  model shard, not a memory problem.
 - **Build tab**: version check against the Niko1221/Strata releases, ready-made
   download with SHA-256 verification, or a from-source build whose dropdowns are
   extracted from that release's own `CMakeLists.txt` and `setup.py` and diffed

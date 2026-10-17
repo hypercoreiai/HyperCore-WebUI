@@ -30,6 +30,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Iterator
+from pathlib import Path
 
 # The engine's own words for a verifier that cannot go on (#267): the process may
 # stay alive and even print DONE, but it must not take another request.
@@ -42,6 +43,68 @@ READY_S = float(os.environ.get("STRATA_ENGINE_READY_S", "900.0"))
 
 class DirectEngineError(RuntimeError):
     pass
+
+# Flags whose next argument is a path the engine needs before it can say READY.
+# These are checked before the process is spawned. A model that is not on disk
+# takes minutes of loading to say so, and the engine says it in the same breath as
+# its memory guard, which reads as a RAM problem and is not one.
+PATH_FLAGS = {"--pack": "dir", "--native": "file", "--ple-gguf": "file",
+              "--expert-profile": "file", "--mtp": "dir",
+              "--control-vector-scaled": "file", "--control-vector": "file"}
+
+# The engine's words for a file it was pointed at and could not read.
+PATH_MARKERS = ("missing model shard", "missing file", "no such file", "cannot open",
+                "does not exist", "not found", "download complete")
+
+
+def missing_paths(args: list[str]) -> list[tuple[str, str]]:
+    """[(flag, path), ...] for every path the run config names that is not there.
+
+    Relative paths are resolved against the current directory, which is where the
+    engine is started. A "path:weight" value (--control-vector-scaled) is checked as
+    its path part only.
+    """
+    out: list[tuple[str, str]] = []
+    for i, token in enumerate(args):
+        kind = PATH_FLAGS.get(token)
+        if kind is None or i + 1 >= len(args):
+            continue
+        raw = str(args[i + 1])
+        if kind == "file" and ":" in raw and raw.rsplit(":", 1)[1].replace(".", "").isdigit():
+            raw = raw.rsplit(":", 1)[0]
+        path = Path(raw)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        ok = path.is_dir() if kind == "dir" else path.is_file()
+        if not ok:
+            out.append((token, raw))
+    return out
+
+
+def _to_mib(value: str, unit: str) -> float:
+    v = float(value)
+    return v * 1024.0 if unit.lower().startswith("gi") else v
+
+
+def memory_short(tail: list[str]) -> bool:
+    """Did the engine's memory guard actually refuse, or was it just reporting?
+
+    The guard line is printed on every request whether or not there is room:
+    "available 28.3 GiB ... floor 2560 MiB" is a satisfied guard. Only when the
+    available figure is under the floor - or the engine says it could not pin or
+    allocate - is the machine genuinely out of room.
+    """
+    import re
+    for line in tail:
+        low = line.lower()
+        if "memory guard" in low:
+            avail = re.search(r"available ([\d.]+) (GiB|MiB)", low)
+            floor = re.search(r"floor (\d+) MiB", low)
+            if avail and floor and _to_mib(avail[1], avail[2]) < float(floor[1]):
+                return True
+        if "out of memory" in low or "cannot pin" in low:
+            return True
+    return False
 
 
 class DirectEngine:
@@ -108,12 +171,30 @@ class DirectEngine:
                 continue
         tail = tail[-8:]
         reason = "\n  ".join(tail) if tail else "it said nothing"
-        hint = ""
+        return (f"the engine exited{'' if code is None else ' with code ' + str(code)}: "
+                f"{reason}{self._hint(tail)}")
+
+    def _hint(self, tail: list[str]) -> str:
+        """What to do about it, in the engine's own terms.
+
+        Two failures look alike in the log and are nothing alike in practice: a path
+        the config got wrong, and a machine that is genuinely out of room. Saying
+        "stop the other engine" when the model file is missing sends the user looking
+        in the wrong place, so the two are told apart here - the memory guard line is
+        printed whether or not it refused, so it is read as numbers, not as a keyword.
+        """
         joined = " ".join(tail).lower()
-        if "memory guard" in joined or "out of memory" in joined:
-            hint = ("\n  the machine has no room for a second engine: stop the other one "
-                   "(or the tune) and start this again.")
-        return f"the engine exited{'' if code is None else ' with code ' + str(code)}: {reason}{hint}"
+        for marker in PATH_MARKERS:
+            if marker in joined:
+                bad = [l.strip() for l in tail if any(m in l.lower() for m in PATH_MARKERS)]
+                return ("\n  the run config points at files that are not on this machine:\n  "
+                        + "\n  ".join(bad[:4])
+                        + "\n  put the real paths in the config (Config view, or the "
+                        "config file named at the top of this run) and start again.")
+        if memory_short(tail):
+            return ("\n  the machine has no room for a second engine: stop the other one "
+                    "(or the tune) and start this again.")
+        return ""
 
     @staticmethod
     def _kv(line: str) -> dict[str, object]:
@@ -135,6 +216,13 @@ class DirectEngine:
                 fd, self._temp_log = tempfile.mkstemp(prefix="strata-", suffix=".log")
                 os.close(fd)
                 log = open(self._temp_log, "ab")
+            missing = missing_paths(self.args)
+            if missing:
+                raise DirectEngineError(
+                    "the run config names paths that are not on this machine: "
+                    + "; ".join(f"{flag} {path}" for flag, path in missing)
+                    + "\n  set them in the Config view, or edit the config file, then start again."
+                )
             try:
                 self.proc = subprocess.Popen(
                     [self.exe, *self.args],

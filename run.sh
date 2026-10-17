@@ -4,6 +4,7 @@
 #   ./run.sh                  newest run config in config/, else engine/strata directly
 #   ./run.sh q2_0           config/run-q2_0.json, config/q2_0.json, or any name
 #   ./run.sh config/x.json  a path, verbatim
+#   ./run.sh --no-attach    flags after the name are passed to the server as they are
 #
 # One engine per machine. Two things follow from that:
 #
@@ -28,6 +29,10 @@ list_configs() {
   ls -1 "$CFG_DIR"/*.json 2>/dev/null | grep -v build_options.json | sed 's/^/  /'
 }
 
+# A config with the template's placeholder paths in it is not a run config: it is
+# the shape of one. Never pick it by accident, and say so when asked for it.
+is_template() { grep -q "ABSOLUTE/PATH/TO" "$1" 2>/dev/null; }
+
 pick_config() {
   if [ -n "$1" ]; then
     for c in "$1" "$CFG_DIR/$1" "$CFG_DIR/run-$1" "$CFG_DIR/$1.json" "$CFG_DIR/run-$1.json"; do
@@ -35,8 +40,10 @@ pick_config() {
     done
     return 1
   fi
-  c=$(ls -t "$CFG_DIR"/run-*.json 2>/dev/null | head -1)
-  [ -z "$c" ] && c=$(ls -t "$CFG_DIR"/*.json 2>/dev/null | grep -v build_options.json | head -1)
+  for c in $(ls -t "$CFG_DIR"/run-*.json 2>/dev/null | grep -v 'run-example\.json'); do
+    if ! is_template "$c"; then printf '%s\n' "$c"; return 0; fi
+  done
+  c=$(ls -t "$CFG_DIR"/*.json 2>/dev/null | grep -v build_options.json | grep -v 'run-example\.json' | head -1)
   [ -n "$c" ] && printf '%s\n' "$c"
   return 0
 }
@@ -59,7 +66,16 @@ if already_running; then
   exit 0
 fi
 
-CFG=$(pick_config "${1:-}")
+NAME=""
+EXTRA=""
+for arg in "$@"; do
+  case "$arg" in
+    -*) EXTRA="$EXTRA $arg" ;;
+    *) [ -z "$NAME" ] && NAME="$arg" ;;
+  esac
+done
+
+CFG=$(pick_config "$NAME")
 if [ -z "$CFG" ]; then
   if [ -f engine/strata ] || [ -n "$HYPERCORE_ENGINE_URL" ]; then
     echo "no run config in $CFG_DIR/ - starting engine/strata; set the model paths in the Config view."
@@ -69,6 +85,9 @@ if [ -z "$CFG" ]; then
     list_configs
     exit 1
   fi
+elif is_template "$CFG"; then
+  echo "warning: $CFG is the template - its paths are placeholders."
+  echo "Fill them in, or run ./run.sh <name> for a config that has real paths."
 fi
 
 MODE=strata
@@ -78,6 +97,7 @@ MODE=strata
 ARGS="--engine $MODE --host $HOST --port $PORT --api-key ${HYPERCORE_API_KEY:-0000} --open"
 [ -n "$CFG" ] && ARGS="$ARGS --config $CFG"
 [ -n "$HYPERCORE_ENGINE_URL" ] && ARGS="$ARGS --engine-url $HYPERCORE_ENGINE_URL"
+[ -n "$EXTRA" ] && ARGS="$ARGS $EXTRA"
 
 if [ "$MODE" = "attach" ]; then
   echo "engine: attached to $HYPERCORE_ENGINE_URL   http://$HOST:$PORT"
