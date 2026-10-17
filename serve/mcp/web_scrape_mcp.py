@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """serve/mcp/web_scrape_mcp.py - MCP server: sandboxed downloads and page media.
 
 HyperCore starts it from mcp.yaml.  The Monitor shows it as soon as it answers; its tools are `status`,
@@ -14,6 +15,7 @@ Binary files are inspected with `file_info`, which reports size, type and image 
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import html.parser
 import ipaddress
@@ -34,6 +36,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 SCRAPE_DIR = Path(os.environ.get("SCRAPE_DIR") or (Path.home() / "downloads")).expanduser().resolve()
 MAX_FILE_BYTES = int(float(os.environ.get("SCRAPE_MAX_FILE_MB") or 200) * 1024 * 1024)
@@ -210,12 +213,12 @@ def guess_mime(path: Path) -> str:
 
 
 def image_size(path: Path) -> dict | None:
-    try:
+    with contextlib.suppress(ImportError, OSError, ValueError):
+        # Pillow is optional here; a file Pillow cannot open is not an error, it just
+        # means the header check below has to decide.
         from PIL import Image
         with Image.open(path) as img:
             return {"width": int(img.width), "height": int(img.height)}
-    except Exception:
-        pass
     try:
         with open(path, "rb") as handle:
             head = handle.read(4096)
@@ -252,7 +255,7 @@ def media_size(path: Path) -> dict | None:
         data = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return None
-    info = {}
+    info: dict[str, object] = {}
     for stream in data.get("streams") or []:
         if stream.get("width") and stream.get("height"):
             info["width"], info["height"] = int(stream["width"]), int(stream["height"])
@@ -311,7 +314,7 @@ def _has_pillow() -> bool:
     try:
         from PIL import Image  # noqa: F401
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
@@ -568,7 +571,7 @@ def list_downloads(subfolder: str = "", mime_type: str = "", sort: str = "newest
         return {**header, "root": str(root), "total": 1, "shown": 1,
                 "files": [{"path": str(root.relative_to(SCRAPE_DIR)), "bytes": root.stat().st_size,
                           "mime": guess_mime(root), "modified": _iso(root.stat().st_mtime)}]}
-    rows = []
+    rows: list[dict[str, Any]] = []
     for path in root.rglob("*"):
         if not path.is_file() or path.name.startswith(".tmp_"):
             continue
@@ -580,13 +583,13 @@ def list_downloads(subfolder: str = "", mime_type: str = "", sort: str = "newest
         rows.append({"path": str(path.relative_to(SCRAPE_DIR)), "bytes": stat.st_size, "mime": mime,
                     "modified": _iso(stat.st_mtime)})
     if sort == "oldest":
-        rows.sort(key=lambda row: row["modified"])
+        rows.sort(key=lambda row: str(row["modified"]))
     elif sort == "name":
-        rows.sort(key=lambda row: row["path"].lower())
+        rows.sort(key=lambda row: str(row["path"]).lower())
     elif sort == "size":
-        rows.sort(key=lambda row: row["bytes"], reverse=True)
+        rows.sort(key=lambda row: int(row["bytes"]), reverse=True)
     else:
-        rows.sort(key=lambda row: row["modified"], reverse=True)
+        rows.sort(key=lambda row: str(row["modified"]), reverse=True)
     shown = rows[: max(1, min(int(limit), MAX_LIST))]
     return {**header, "root": str(SCRAPE_DIR), "total": len(rows), "shown": len(shown),
             "truncated": len(rows) > len(shown), "files": shown}
@@ -742,7 +745,8 @@ def handle(msg: dict):
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
     if method == "tools/call":
-        return {"jsonrpc": "2.0", "id": rid, "result": call(params.get("name"), params.get("arguments") or {})}
+        return {"jsonrpc": "2.0", "id": rid, "result": call(str(params.get("name") or ""),
+                                                         params.get("arguments") or {})}
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"no method {method}"}}
 
 

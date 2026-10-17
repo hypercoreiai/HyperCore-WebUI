@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """The document tools behind serve/mcp/docs_mcp.py: create, read, edit, write, delete, list.
 
 The path guard and the text rules live here; the stdio transport and the tool schemas are in
@@ -9,6 +10,7 @@ called; an edit proceeds on the first try. Both gates stay in the tree for the l
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -112,6 +114,31 @@ def _lock(path: Path) -> threading.Lock:
         return lock
 
 
+def _read_head(path: Path, limit: int) -> bytes:
+    """Read at most `limit` bytes, under the per-path lock.
+
+    The tool handlers are async, so the blocking read is run in a thread rather than on the
+    event loop: a 1.5 MB document should not hold up every other call in the server.
+    """
+    with _lock(path), open(path, "rb") as handle:
+        return handle.read(limit)
+
+
+def _create_text(path: Path, content: str) -> None:
+    with _lock(path), open(path, "x", encoding="utf-8") as handle:
+        handle.write(content)
+
+
+def _write_text(path: Path, content: str) -> None:
+    with _lock(path), open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    with _lock(path), open(path, "wb") as handle:
+        handle.write(data)
+
+
 def _bounded(content: str, path: str) -> str | None:
     if not isinstance(content, str):
         return f"Error: content for '{path}' must be text."
@@ -131,8 +158,7 @@ async def create_file(path: str, content: str) -> str:
         target = guard.validate_path(path)
         _require_text(target, writing=True)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with _lock(target), open(target, "x", encoding="utf-8") as handle:
-            handle.write(content)
+        await asyncio.to_thread(_create_text, target, content)
         tool_permissions.note_created(target)
         return f"Successfully created {target}"
     except PermissionError as exc:
@@ -152,8 +178,7 @@ async def read_file(path: str, start_line: int | None = None, end_line: int | No
             return f"Error: File '{path}' not found."
         _require_text(target)
         size = target.stat().st_size
-        with open(target, "rb") as handle:
-            raw = handle.read(MAX_CHARS + 1)
+        raw = await asyncio.to_thread(_read_head, target, MAX_CHARS + 1)
         try:
             content = raw.decode("utf-8")
             unreadable = ""
@@ -222,8 +247,7 @@ async def edit_file(path: str, edits: list[dict], force: bool = False) -> str:
         parsed, error = doc_text.parse_edits(edits)
         if error:
             return f"Error: {error}"
-        with _lock(target), open(target, "rb") as handle:
-            raw = handle.read(MAX_CHARS + 1)
+        raw = await asyncio.to_thread(_read_head, target, MAX_CHARS + 1)
         try:
             content = raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -232,16 +256,14 @@ async def edit_file(path: str, edits: list[dict], force: bool = False) -> str:
             if len(raw) > MAX_CHARS:
                 return f"Error: '{path}' is larger than {MAX_CHARS} characters; edit a smaller file or use run with sed."
             patched, byte_report = doc_text.apply_edits(raw, parsed)
-            with _lock(target), open(target, "wb") as handle:
-                handle.write(patched)
+            await asyncio.to_thread(_write_bytes, target, patched)
             tool_permissions.note_created(target)
             return (f"Edited {target}: {len(parsed)} edit(s) applied (the file is not valid UTF-8, "
                     f"so the edits were matched byte by byte).\n" + "\n".join(byte_report))
         if len(content) > MAX_CHARS:
             return f"Error: '{path}' is larger than {MAX_CHARS} characters; edit a smaller file or use run with sed."
         updated, report = doc_text.apply_edits(content, parsed)
-        with _lock(target), open(target, "wb") as handle:
-            handle.write(updated.encode("utf-8"))
+        await asyncio.to_thread(_write_bytes, target, updated.encode("utf-8"))
         tool_permissions.note_created(target)
         return f"Edited {target}: {len(parsed)} edit(s) applied.\n" + "\n".join(report)
     except PermissionError as exc:
@@ -262,8 +284,7 @@ async def write_file(path: str, content: str, force: bool = False) -> str:
         if not target.is_file():
             return f"Error: File '{path}' not found. Use create_file for a new document."
         del force
-        with _lock(target), open(target, "w", encoding="utf-8") as handle:
-            handle.write(content)
+        await asyncio.to_thread(_write_text, target, content)
         tool_permissions.note_created(target)
         return f"Successfully saved {target}"
     except PermissionError as exc:

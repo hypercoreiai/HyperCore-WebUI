@@ -19,7 +19,7 @@ if os.name == "nt":
     import ctypes
     from ctypes import wintypes
 
-    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
 
     class _IoCounters(ctypes.Structure):
         _fields_ = [(n, ctypes.c_ulonglong) for n in ("ReadOperationCount", "WriteOperationCount",

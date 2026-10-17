@@ -668,7 +668,9 @@ def deterministic_summary(messages: list) -> str:
             for call in message.get("tool_calls") or []:
                 if not isinstance(call, dict):
                     continue
-                fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+                fn = call.get("function")
+                if not isinstance(fn, dict):
+                    fn = {}
                 names.append(str(fn.get("name") or call.get("name") or "tool"))
             if names:
                 lines.append("Called: " + ", ".join(names))
@@ -1195,7 +1197,7 @@ def servers_from(block, where: str) -> dict[str, dict]:
 
 def settings_from(cfg: dict) -> dict:
     """The run config's optional `"mcp"` block: timeout_s, max_result_chars, max_rounds, start_timeout_s."""
-    out = {}
+    out: dict[str, object] = {}
     for key, value in (cfg.get("mcp") or {}).items():
         number = isinstance(value, (int, float)) and not isinstance(value, bool)
         if key in ("timeout_s", "start_timeout_s"):
