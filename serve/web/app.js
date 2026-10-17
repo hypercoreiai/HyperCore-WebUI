@@ -274,7 +274,10 @@ if (window.HYPERCORE_API_KEY && !store.get("apikey", "")) store.set("apikey", wi
 
 function headers(json = false) {
   const h = {};
-  const key = store.get("apikey", "");
+  // A key typed in Settings wins. Otherwise use the key this page was served with:
+  // a browser in private mode, or one whose storage was cleared, has nothing stored
+  // and would otherwise 401 on every call while the page itself knows the key.
+  const key = store.get("apikey", "") || (typeof window !== "undefined" && window.HYPERCORE_API_KEY) || "";
   if (key) h.Authorization = "Bearer " + key;
   if (json) h["Content-Type"] = "application/json";
   return h;
@@ -992,7 +995,14 @@ function onTool(m, x) {
     paintBeat();
     return;
   }
-  if (x.event === "limit") { m.limit = x.max_rounds; beat = null; paintBeat(); return; }
+  if (x.event === "limit") {
+    // Which cap was hit: the round cap (mcp.max_rounds) or the call cap (mcp.max_tool_calls).
+    m.limit = x.max_rounds;
+    m.limitCalls = x.max_tool_calls || 0;
+    m.limitRounds = x.rounds ?? 0;
+    m.limitCallsRun = x.calls ?? 0;
+    beat = null; paintBeat(); return;
+  }
   if (x.event === "condensed") {                    // the condenser shortened earlier results (mcp.yaml)
     m.condensed = (m.condensed || 0) + (x.chars || 0);
     paintBeat();
@@ -1609,7 +1619,12 @@ async function send() {
   for (const t of m.tools || []) if (t.state === "writing" || t.state === "running") { t.state = "skipped"; t.ms = null; }
   const ran = (m.tools || []).filter((t) => t.state === "done" || t.state === "error").length;
   if (ran) m.meta = `${m.meta ? `${m.meta} · ` : ""}${ran} tool call${ran > 1 ? "s" : ""}`;
-  if (m.limit) m.meta = `${m.meta || ""} · stopped at the limit of ${m.limit} tool rounds (mcp.max_rounds)`;
+  if (m.limit) {
+    const byCalls = m.limitCalls && m.limitCallsRun >= m.limitCalls;
+    m.meta = `${m.meta || ""} · stopped at the ${byCalls
+      ? `${m.limitCalls} tool call limit (mcp.max_tool_calls), ${m.limitRounds} rounds used`
+      : `${m.limit} tool round limit (mcp.max_rounds), ${m.limitCallsRun} calls run`}`;
+  }
   busy = null;
   endTurn();
   if (frame) cancelAnimationFrame(frame);
@@ -1645,18 +1660,67 @@ $("new-btn").onclick = () => {
   renderChat();
   toast("info", "New chat", "The last one was cleared.", 6000, {label: "Undo", run: () => { messages = backup; compactState = compactBackup; saveChat(); saveCompact(); renderChat(); }});
 };
-$("export-btn").onclick = () => {
-  if (!messages.length) { toast("info", "Nothing to save yet"); return; }
+// The transcript as Markdown. The download button saves it to the browser's own
+// downloads folder; the archive button posts the same text to POST /history/archive,
+// which writes it to data/history/_old_chats/ (serve/chat_archive.py).
+function chatMarkdown() {
   const tools = (m) => (m.tools || []).filter((t) => t.result != null).map((t) =>
     `<details><summary>Tool ${t.server ? `${t.server} / ` : ""}${t.tool || t.name}${t.ok ? "" : " (error)"}</summary>\n\n` +
     `\`\`\`json\n${JSON.stringify(t.arguments || {}, null, 2)}\n\`\`\`\n\n\`\`\`\n${t.result}\n\`\`\`\n\n</details>\n\n`).join("");
-  const md = messages.map((m) => m.role === "user" ? `## You\n\n${m.text}\n` :
+  return messages.map((m) => m.role === "user" ? `## You\n\n${m.text}\n` :
     `## ${health.model}\n\n${m.reasoning ? `<details><summary>Thinking</summary>\n\n${m.reasoning}\n\n</details>\n\n` : ""}${tools(m)}${m.text || m.error || ""}\n`).join("\n");
+}
+function chatStamp() { return new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-"); }
+function chatTitle() {
+  const first = messages.find((m) => m.role === "user");
+  return ((first && first.text) || "").split("\n")[0].slice(0, 60);
+}
+
+// The browser's own downloads folder. Used by the download button, and by the
+// archive button when the server behind the page has no history route.
+function saveChatMarkdown() {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([md], {type: "text/markdown"}));
-  a.download = `hypercore-chat-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.md`;
+  a.href = URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"}));
+  a.download = `hypercore-chat-${chatStamp()}.md`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+$("export-btn").onclick = () => {
+  if (!messages.length) { toast("info", "Nothing to save yet"); return; }
+  saveChatMarkdown();
+};
+
+$("archive-btn").onclick = async () => {
+  if (!messages.length) { toast("info", "Nothing to save yet"); return; }
+  const btn = $("archive-btn");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/history/archive", {
+      method: "POST",
+      headers: headers(true),
+      body: JSON.stringify({chat: chatMarkdown(), title: chatTitle()}),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      throw new Error("this server needs its API key: put the key the server was started with " +
+                      "into About > Settings, then try again");
+    }
+    if (res.status === 404) {
+      // The page came from this server, but the process behind it was started before
+      // the history route existed: the HTML is read fresh, the Python code is not.
+      toast("warn", "This server has no history route yet",
+           "Restart the WebUI to load /history/archive. The chat is saved as a file instead.",
+           8000, {label: "Save as Markdown", run: saveChatMarkdown});
+      return;
+    }
+    if (!res.ok) throw new Error((out.error && out.error.message) || `the server said ${res.status}`);
+    toast("success", "Chat archived", out.path || out.name, 6000);
+  } catch (e) {
+    toast("error", "Could not archive the chat", e.message || String(e), 6000);
+  } finally {
+    btn.disabled = false;
+  }
 };
 
 // pictures and text files: the attach button, dropping them on the chat, or pasting a picture (issue #30)

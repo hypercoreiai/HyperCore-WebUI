@@ -5,7 +5,8 @@
 
 Endpoints: POST /v1/chat/completions (OpenAI, stream and non-stream), POST /v1/messages (Anthropic, stream and
 non-stream), GET /v1/models, GET /models, GET /props, GET /slots, GET /health, GET /mcp. One sequence at a time behind a FIFO (plan: one resident sequence).
-Tools from MCP servers (serve/mcp/, `mcp.yaml` beside the server, `"mcp_servers"` in the config or --mcp-config) are
+Tools from MCP servers (serve/mcp/, `mcp.yaml` beside the server or `config/mcp.yaml`,
+`"mcp_servers"` in the config, or --mcp-config) are
 offered only to requests that ask for them with `"hypercore_mcp": true` - the web app does; other clients see exactly
 the API they always saw.
 Images (optional, when the config has a "vision" entry): OpenAI image_url parts and Anthropic image blocks (base64
@@ -61,7 +62,7 @@ from serve import (
 )
 from serve import prompts as agent_prompts
 from serve import responses as responses_api
-from serve import build_api, tune_api
+from serve import build_api, chat_archive, tune_api
 from serve.frontend import (
     ChatTemplate,
     Event,
@@ -3014,7 +3015,8 @@ def _fit_prepared(svc: Service, hub, messages, tools, kw, max_req):
 def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new, max_req, sampling, cancel,
                  mcp_names, seed_compact=None):
     """Service.run with the MCP tools executed here: the model writes a call to an MCP tool, the server runs it, adds
-    the call and its result to the conversation and lets the model continue - up to `max_rounds` times.  Yields what
+    the call and its result to the conversation and lets the model continue - up to `max_rounds` times, and up to
+    `max_tool_calls` calls in total (0: no call cap).  Yields what
     Service.run yields (text, thinking, the request's own tool calls) plus ("mcp", {...}) for the tool activity, and
     one ("done", ...) at the very end with the output tokens of every round.
 
@@ -3022,7 +3024,8 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
     turn as always (the client answers it).  MCP calls written in the same answer are then not run (their results
     could not reach the model before the client's)."""
     max_rounds = int(hub.settings["max_rounds"])
-    total, rounds, done = 0, 0, None
+    max_calls = int(hub.settings.get("max_tool_calls") or 0)   # 0: no separate cap, the round cap is the cap
+    total, rounds, calls_run, done = 0, 0, 0, None
     messages = list(messages)
     if seed_compact:
         # The prompt did not fit at all, so it was folded before this loop started.
@@ -3099,7 +3102,8 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
         total += done["completion_tokens"]
         run_them = calls and not own_calls and done["finish"] == "stop" and not cancel.is_set()
         if run_them and rounds >= max_rounds:
-            yield "mcp", {"event": "limit", "max_rounds": max_rounds}
+            yield "mcp", {"event": "limit", "max_rounds": max_rounds, "max_tool_calls": max_calls,
+                          "rounds": rounds, "calls": calls_run}
             run_them = False
         if not run_them:
             for c in calls:                              # announced, never run: close them in the client's view
@@ -3107,8 +3111,18 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
                               "chars": 0, "truncated": False, "ms": 0}
             break
         rounds += 1
-        results = []
+        results, ran, cut = [], [], False
         for c in calls:
+            # The call cap: one round may announce more calls than the request is allowed to run. The
+            # ones that fit are run, the rest are closed in the client's view and never reach the model.
+            if max_calls and calls_run >= max_calls:
+                cut = True
+                yield "mcp", {"event": "result", "id": c.id, "ok": False, "skipped": True,
+                              "text": f"not run: this request reached its {max_calls} tool call limit",
+                              "chars": 0, "truncated": False, "ms": 0}
+                continue
+            ran.append(c)
+            calls_run += 1
             s, tool = hub.routes().get(c.name, (None, c.name))
             yield "mcp", {"event": "call", "id": c.id, "name": c.name, "server": s.name if s else None,
                           "tool": tool, "arguments": c.arguments, "round": rounds}
@@ -3138,14 +3152,21 @@ def run_with_mcp(svc: Service, hub, messages, tools, kw, ids, thinking, max_new,
                   f"{r['ms'] / 1000:.1f} s{' (truncated for the model)' if r['truncated'] else ''}", flush=True)
             results.append(r["text"])
             yield "mcp", {"event": "result", "id": c.id, **{k: r[k] for k in ("ok", "text", "chars", "truncated", "ms")}}
-        if cancel.is_set() or len(results) < len(calls):
+        if cut:
+            yield "mcp", {"event": "limit", "max_rounds": max_rounds, "max_tool_calls": max_calls,
+                          "rounds": rounds, "calls": calls_run}
+        if cancel.is_set() or len(results) < len(ran):
             done = {**done, "finish": "cancel"}
             break
         messages.append({"role": "assistant", "content": "".join(text).strip(),
                          **({"reasoning_content": "".join(reasoning).strip()} if reasoning else {}),
                          "tool_calls": [{"id": c.id, "type": "function",
-                                         "function": {"name": c.name, "arguments": c.arguments}} for c in calls]})
+                                         "function": {"name": c.name, "arguments": c.arguments}} for c in ran]})
         messages += [{"role": "tool", "content": r} for r in results]
+        if cut:
+            # The call budget is spent. The results that did run are in the transcript; no further
+            # round can use them, so the turn ends here instead of looping on calls that will not run.
+            break
         for kind, payload in _fit_prepared(svc, hub, messages, tools, kw, max_req):
             if kind == "ready":
                 messages, (ids, thinking, max_new) = payload
@@ -4078,6 +4099,19 @@ def make_handler(svc: Service):
                             result["restarted"] = False
                             result["note"] = str(exc)
                     self._json(200 if result.get("ok") else 400, result)
+                    return
+                if path == "/history/archive":               # the Chat tab's "Save to history" button
+                    if not self._own_page("a chat can be written to the history folder"):
+                        return
+                    try:
+                        self._json(200, chat_archive.archive_chat(
+                            str(req.get("chat") or req.get("text") or ""),
+                            str(req.get("title") or "")))
+                    except ValueError as e:
+                        self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
+                    except OSError as e:
+                        self._json(500, {"error": {"type": "server_error",
+                                                  "message": f"could not write the chat: {e}"}})
                     return
                 if path == "/assist/models/probe":           # re-time the endpoint and rewrite the pinned list
                     try:
@@ -5235,7 +5269,14 @@ def find_running_engine(cfg: dict, own_port: int) -> str | None:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=3.0) as s:
                 s.sendall(b"GET /health HTTP/1.0\r\n\r\n")
-                body = s.recv(4096).decode("utf-8", "replace")
+                # One recv gets the headers and stops there; the JSON answer is the next packet.
+                raw = b""
+                while len(raw) < 16384:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    raw += chunk
+                body = raw.decode("utf-8", "replace")
         except OSError:
             continue
         if '"status": "ok"' in body or '"max_context"' in body:
@@ -5254,6 +5295,19 @@ def load_config_text(raw: str | None) -> dict:
         return parse_config_object(resolve_configuration_payload(raw))
     except (ValueError, FileNotFoundError) as e:
         raise SystemExit(f"[hypercore] {e}") from e
+
+
+def mcp_yaml() -> str:
+    """The MCP config this project reads when --mcp-config is not given.
+
+    `mcp.yaml` beside the server first (where a Strata box keeps it), then `config/mcp.yaml`
+    (where HyperCore-WebUI keeps it, so the project root stays free of loose files). The root
+    path is returned when neither exists, so a missing file is simply no servers.
+    """
+    for candidate in (ROOT / "mcp.yaml", ROOT / "config" / "mcp.yaml"):
+        if candidate.is_file():
+            return str(candidate)
+    return str(ROOT / "mcp.yaml")
 
 
 def main() -> int:
@@ -5295,7 +5349,8 @@ def main() -> int:
                     help="require this key on /v1/* (Authorization: Bearer ... or x-api-key); also $HYPERCORE_API_KEY")
     ap.add_argument("--mcp-config", help="a JSON file with MCP servers in Claude Desktop's format ({\"mcpServers\": "
                                          "{...}}) or a mcp.yaml; the web app's chat can use their tools (also "
-                                         "\"mcp_servers\" in the config, and the mcp.yaml beside this server)")
+                                         "\"mcp_servers\" in the config, and the mcp.yaml beside this server or "
+                                         "config/mcp.yaml)")
     ap.add_argument("--lazy", action="store_true", help="start the text-only API unloaded; load on first request")
     ap.add_argument("--api-monitor", action="store_true",
                     help="the API request monitor at /api-monitor: keeps the last 100 requests' prompts and answers in "
@@ -5353,7 +5408,7 @@ def main() -> int:
         merges = (tpath / "merges.txt").read_text(encoding="utf-8").split("\n")
         types = json.loads((tpath / "token_type.json").read_text())
         tok = ST.Tokenizer(tokens, merges, types)
-    hub = hub_from_config(cfg, a.mcp_config, yaml_path=str(ROOT / "mcp.yaml"))   # before the minutes of loading: a bad entry stops here
+    hub = hub_from_config(cfg, a.mcp_config, yaml_path=mcp_yaml())   # before the minutes of loading: a bad entry stops here
     attach_url = engine_url(cfg, a.engine_url)
     if a.engine == "attach" and not attach_url:
         ap.error("--engine attach needs --engine-url (or \"engine_url\" in the config, or $HYPERCORE_ENGINE_URL)")
