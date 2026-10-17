@@ -37,6 +37,10 @@ from serve.winjob import contain
 
 PROTOCOL = "2025-06-18"               # the MCP revision HyperCore asks for; the server's answer is used as given
 DEFAULTS = {"timeout_s": 60.0, "max_result_chars": 20000, "max_rounds": 500, "start_timeout_s": 120.0,
+          # A round is one assistant turn that emits calls; a turn can emit several. max_rounds caps the
+          # turns, max_tool_calls caps the calls themselves. 0 means no separate call cap: the round cap
+          # is the cap.
+          "max_tool_calls": 500,
           "condense_at": 0.0, "condense_after": 0, "condense_chars": 600,   # condense_at 0: never condense
           "compact_at": 0.0, "compact_retain_bytes": 80_000,               # compact_at 0: never compact
           "tool_allowlist": None}          # None: every tool is offered. A list narrows the tool block.
@@ -1109,7 +1113,7 @@ class McpHub:
                 "collisions": sorted(self.collisions),
                 "usage": {**self.usage, "tokens_est": self.usage["chars"] // 4},
                 "settings": {k: self.settings[k] for k in ("timeout_s", "max_result_chars", "max_rounds",
-                                         "condense_at", "condense_after", "condense_chars",
+                                         "max_tool_calls", "condense_at", "condense_after", "condense_chars",
                                          "compact_at", "compact_retain_bytes")},
                 "tool_allowlist": sorted(allowed) if allowed is not None else None}
 
@@ -1122,14 +1126,25 @@ class McpHub:
 
 
 # ------------------------------------------------------------------------------------------------ config
+PROJECT_ROOT = Path(__file__).resolve().parents[2]      # the HyperCore-WebUI directory
+
+
 def _expand_path(value):
     """`~`, `$HOME` and `${HOME}` in a server entry resolve to the running user's home, so one
     mcp.yaml works for every profile on the machine. `$HOME` only matches when the name ends
-    there, so `$HOME_SUFFIX` is left alone."""
+    there, so `$HOME_SUFFIX` is left alone.
+
+    `$HYPERCORE_ROOT` is this project's directory and `$HYPERCORE_PYTHON` the interpreter running
+    the server, so the shipped config names its own servers and its own venv without a path that
+    only exists on one box.
+    """
     if not isinstance(value, str) or not value:
         return value
     home = os.environ.get("HOME") or str(Path.home())
     text = re.sub(r"\$\{HOME\}|\$HOME(?![A-Za-z0-9_])", home, value)
+    text = re.sub(r"\$\{HYPERCORE_ROOT\}|\$HYPERCORE_ROOT(?![A-Za-z0-9_])", str(PROJECT_ROOT), text)
+    text = re.sub(r"\$\{HYPERCORE_PYTHON\}|\$HYPERCORE_PYTHON(?![A-Za-z0-9_])",
+                  sys.executable or "python3", text)
     if text.startswith("~"):
         text = home + text[1:]
     return text
@@ -1190,6 +1205,11 @@ def settings_from(cfg: dict) -> dict:
         elif key in ("max_result_chars", "max_rounds", "condense_chars", "compact_retain_bytes"):
             if not number or value != int(value) or value < 1:
                 raise SystemExit(f"[hypercore] config mcp.{key}={value!r}: expected a positive integer")
+            out[key] = int(value)
+        elif key == "max_tool_calls":
+            if not number or value != int(value) or value < 0:
+                raise SystemExit(f"[hypercore] config mcp.{key}={value!r}: expected a whole number of tool "
+                                 "calls (0: no separate cap, the round cap still applies)")
             out[key] = int(value)
         elif key == "condense_after":
             if not number or value != int(value) or value < 0:
@@ -1325,7 +1345,7 @@ def load_mcp_yaml(path: str) -> tuple[dict, dict]:
     if not isinstance(data, dict):
         raise SystemExit(f"[hypercore] {path}: the file must be a mapping")
     settings = {k: data[k] for k in ("timeout_s", "start_timeout_s", "max_result_chars", "max_rounds",
-                        "condense_at", "condense_after", "condense_chars",
+                        "max_tool_calls", "condense_at", "condense_after", "condense_chars",
                         "compact_at", "compact_retain_bytes", "tool_allowlist") if k in data}
     block = data.get("servers", data.get("mcp_servers", data.get("mcpServers")))
     servers = servers_from(block, path)

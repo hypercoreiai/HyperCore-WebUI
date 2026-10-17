@@ -1,0 +1,117 @@
+# MCP servers for the HyperCore-WebUI chat.
+#
+# HyperCore reads this file at startup: --mcp-config wins, then mcp.yaml beside the server,
+# then this file. A server named here replaces the same name in a run config's "mcp_servers".
+# Restart the WebUI after a change. The Monitor tab lists each server, its state, and its tools.
+#
+# $HYPERCORE_ROOT is this project's directory and $HYPERCORE_PYTHON the interpreter that is
+# running the server (its .venv when there is one), so nothing here is a path from one box.
+#
+# Tool results are re-prefilled into the conversation every round, so the prompt grows with
+# the number of rounds and the size of each result. A 262,144-token context has no headroom
+# left for 8 rounds of 20,000-character results: the request is refused with 400
+# ("prompt ... leaves no room to answer in the context ... requests are never truncated"),
+# not cut.
+#
+# condense_at: when the prompt about to be read reaches this fraction of the context, the
+# results of EARLIER rounds are shortened before the next prefill - their beginning and end
+# are kept, the middle becomes a count. The model read them in full when they arrived, so
+# this costs context, not accuracy. 0 = never condense.
+# condense_after: a floor - condensing never starts before this many rounds.
+# condense_chars: how much of each older result to keep.
+#
+# compact_at: once the prompt passes this fraction of the context, the older turns are
+# replaced by one handoff and the turn continues. The newest user message and the latest
+# tool round stay verbatim. 0 = never. This is what keeps a long tool-using turn from
+# ending in "start a new chat".
+# compact_retain_bytes: how much of the older user text to keep alongside that handoff.
+
+# max_rounds: how many assistant turns may emit tool calls in one request.
+# max_tool_calls: how many tool calls may actually run in one request. A round can
+# announce several calls, so the round cap alone is not a call cap: the calls that
+# fit are run and the rest are closed as "not run". 0 = no separate call cap.
+
+timeout_s: 90
+max_result_chars: 6000
+max_rounds: 500
+max_tool_calls: 200
+start_timeout_s: 30
+condense_at: 0.75
+condense_after: 2
+condense_chars: 1200
+compact_at: 0.90
+compact_retain_bytes: 80000
+
+servers:
+  web:
+    command: $HYPERCORE_PYTHON
+    args:
+      - $HYPERCORE_ROOT/serve/mcp/web_mcp.py
+    # no env: web_mcp.firefox_bin() already tries $HOME/.local/firefox/firefox,
+    # then firefox, firefox-esr and firefox-bin on PATH.
+
+  browser:
+    command: $HYPERCORE_PYTHON
+    args:
+      - $HYPERCORE_ROOT/serve/mcp/browser_mcp.py
+    env:
+      # The engine is picked on the first call: invisible_playwright (the C++-patched
+      # Firefox), then camoufox, then stock Playwright Firefox. Pin one with
+      # HYPERCORE_BROWSER_ENGINE once it is installed; the browser is opened lazily, so
+      # this server starts and answers status with no engine present.
+      HYPERCORE_BROWSER_SHOTS: $HOME/downloads/browser
+      # Same size as the hub's max_result_chars, so a page is not truncated twice.
+      HYPERCORE_BROWSER_MAX_CHARS: 6000
+      HYPERCORE_BROWSER_TIMEOUT_MS: 30000
+
+  home:
+    command: $HYPERCORE_PYTHON
+    args:
+      - $HYPERCORE_ROOT/serve/mcp/rag_mcp.py
+
+  docs:
+    command: $HYPERCORE_PYTHON
+    args:
+      - $HYPERCORE_ROOT/serve/mcp/docs_mcp.py
+    env:
+      HYPERCORE_DOCS_ROOT: /home   # the machine's document root; use $HOME on a personal box
+
+  scrape:
+    command: $HYPERCORE_PYTHON
+    args:
+      - $HYPERCORE_ROOT/serve/mcp/web_scrape_mcp.py
+    env:
+      SCRAPE_DIR: $HOME/downloads
+      SCRAPE_MAX_FILE_MB: 200
+      SCRAPE_TIMEOUT_S: 60
+      SCRAPE_CONCURRENCY: 4
+
+  terminal:
+    command: $HYPERCORE_PYTHON
+    args:
+      - $HYPERCORE_ROOT/serve/mcp/terminal_mcp.py
+    env:
+      TERMINAL_ROOT: /home
+      TERMINAL_STATE_DIR: $HOME/.terminal
+      TERMINAL_TIMEOUT_S: 30
+      # This phase runs what the account can run. check_command still has the allowlist
+      # and the cd/redirect jail for the later /home/ai-agent/ pass, which turns this off.
+      TERMINAL_ALLOW_ALL: 1
+      # Per-stream clip. The hub cap applies to the JSON document, not to stdout alone,
+      # so TERMINAL_RESULT_CAP is max_result_chars: stdout is shortened before stderr.
+      TERMINAL_MAX_OUT: 6000
+      TERMINAL_RESULT_CAP: 6000
+      # ruff defaults its cache to /home/.ruff_cache, which belongs to the other profile;
+      # point it at this account's own state directory.
+      RUFF_CACHE_DIR: $HOME/.terminal/cache
+      # Match the allowlist to the scoped sudoers grants: the sandbox should not refuse
+      # a command this account is allowed to run.
+      TERMINAL_ALLOW_EXTRA: sudo,setfacl,getfacl,visudo,apt-get,apt,nproc,timeout,npm,yarn,corepack,snap
+
+  assist:
+    command: $HYPERCORE_PYTHON
+    args:
+      - $HYPERCORE_ROOT/serve/mcp/assist_mcp.py
+    env:
+      # The endpoint and key are read from .env by serve/assist.py. These override only if set.
+      HYPERCORE_ASSIST_TIMEOUT_S: 90
