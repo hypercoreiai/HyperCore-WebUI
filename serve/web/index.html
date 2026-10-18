@@ -33,6 +33,16 @@
     <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-info"/></svg>About</button>
   </nav>
+  <!-- Which model version to run: every engine build stored under engine/versions/<quant>
+     and every run config that names a quant (serve/quant_store.py, GET /versions).
+     Choosing one places that build's binaries at engine/strata and restarts the engine. -->
+  <label class="st-version" for="version-select"
+         title="Start one of the model versions this machine has an engine built for">
+    <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-layers"/></svg>
+    <select id="version-select" aria-label="Model version to start">
+      <option value="">Model version</option>
+    </select>
+  </label>
   <span class="st-header__spacer"></span>
   <span class="st-pill" id="pill" data-state="idle" role="status" aria-live="polite">
     <span class="st-pill__dot"></span><span id="pill-text">Connecting&hellip;</span></span>
@@ -357,12 +367,49 @@
     <div class="st-card build-releases">
       <span class="card-title">Available releases</span>
       <select id="build-tag"></select>
+      <!-- A build named by quant is stored under engine/versions/<quant> and can then be
+         started from the Model version dropdown. Left empty, it is the default engine. -->
+      <label class="build-quant" for="build-quant">
+        <span class="muted small">Build for quant</span>
+        <input id="build-quant" type="text" placeholder="q2_0" autocomplete="off" spellcheck="false"
+               title="Store this engine under engine/versions/&lt;quant&gt;. Leave empty for the default engine.">
+      </label>
       <div class="build-actions">
         <button class="st-btn st-btn--primary" id="build-fetch" type="button">Install ready-made engine</button>
         <button class="st-btn" id="build-start" type="button">Clone and build from source</button>
       </div>
       <p class="muted small">The ready-made engine is a prebuilt archive for this operating system.
         Building from source takes 10-20 minutes and lets you choose the options below.</p>
+    </div>
+
+    <!-- The model and engine choices a release's setup.py accepts, read from that
+         release's own setup.py before anything is cloned or built. -->
+    <div class="st-card build-choices" id="build-choices" hidden>
+      <span class="card-title">Setup choices for <span id="build-choices-tag">this release</span></span>
+      <p class="muted small">Read from the release's own setup.py, not from a list we maintain. Nothing is
+        built or downloaded yet: these are what that release can be set up for.</p>
+      <div id="build-choices-groups"></div>
+      <p class="muted small" id="build-choices-rest"></p>
+      <div class="build-actions">
+        <button class="st-btn st-btn--primary" id="setup-run" type="button">Run setup with these</button>
+        <span class="muted small" id="build-choices-note" role="status"></span>
+      </div>
+      <!-- The setup runs in the background. While it does, the button above reads
+           Kill Build and this card says which step of setup.py it is on, how long it
+           has been going, and everything it has complained about. The full log is in
+           the Build log card below. -->
+      <div class="build-status" id="build-status" hidden>
+        <span class="card-title">Build status</span>
+        <div class="build-status__row">
+          <span class="build-status__stage" id="build-status-stage" role="status">not started</span>
+          <span class="muted small" id="build-status-elapsed"></span>
+        </div>
+        <ul class="build-status__problems" id="build-status-problems" hidden></ul>
+      </div>
+      <p class="muted small">The command these boxes stand for. It runs without questions: <code>--yes</code>
+        takes the answer setup.py recommends for anything left unset, <code>--no-start</code> does not launch
+        the engine.</p>
+      <pre id="build-choices-command" class="build-command"></pre>
     </div>
 
     <div class="st-card build-options">

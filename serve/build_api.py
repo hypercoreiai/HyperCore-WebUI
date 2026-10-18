@@ -30,15 +30,31 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from serve import quant_store
+from serve.quant_store import normalise_quant
+
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_DIR = ROOT / "engine"
 TMP_DIR = ROOT / "tmp"
 MANIFEST = ROOT / "config" / "build_options.json"
 REPO = "Niko1221/Strata"
+UA = "HyperCore-WebUI/1.0 (+https://github.com/HyperCore-WebUI; build tab release check)"
 IS_WIN = os.name == "nt"
 EXE = "strata.exe" if IS_WIN else "strata"
 VEXE = "strata-vision.exe" if IS_WIN else "strata-vision"
 WORKER = "hypercore-worker.exe" if IS_WIN else "hypercore-worker"
+
+
+def normalise_or_none(quant: Any) -> str | None:
+    """A quant name, or None when the caller named none or named one badly.
+
+    A bad quant must not stop a build: it is logged and the engine is stored as the
+    default one instead.
+    """
+    try:
+        return normalise_quant(quant) if quant else None
+    except ValueError:
+        return None
 
 
 def _now() -> str:
@@ -106,14 +122,146 @@ def build_status() -> dict[str, Any]:
     releases = listing.get("releases") or []
     newest = releases[0] if releases else None
     have = installed.get("version")
+    options = json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.is_file() else None
     return {
         "installed": installed,
         "latest": listing,
         "newest": newest,
         "update_available": bool(newest and have and newest.get("version") != have),
-        "options": json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.is_file() else None,
+        "options": options,
+        "setup": setup_choices(options or {}),
         "job": JOB.status(),
     }
+
+
+#: The two files that say what a release can be built and configured for. Reading
+#: them from raw.githubusercontent is a fraction of a clone, so the Build tab can
+#: show the choices before any build starts.
+SOURCE_FILES = ("CMakeLists.txt", "setup.py")
+_options_cache: dict[str, dict[str, Any]] = {}
+
+
+def fetch_release_files(tag: str) -> tuple[Path | None, str]:
+    """CMakeLists.txt and setup.py of a release, without cloning it.
+
+    Written under tmp/, which is scratch and deleted straight after: nothing at
+    runtime reads it. Returns (folder, "") or (None, the reason GitHub was not
+    reachable).
+    """
+    dest = TMP_DIR / f"manifest-{tag}"
+    try:
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        for name in SOURCE_FILES:
+            req = urllib.request.Request(f"https://raw.githubusercontent.com/{REPO}/{tag}/{name}",
+                                        headers={"User-Agent": UA})
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / name).write_bytes(urllib.request.urlopen(req, timeout=20).read())
+        return dest, ""
+    except Exception as exc:  # noqa: BLE001 - offline is normal; the tab falls back
+        shutil.rmtree(dest, ignore_errors=True)
+        return None, str(exc)
+
+
+def options_for(tag: str) -> dict[str, Any]:
+    """How a release can be built and configured, read from the release's own files.
+
+    Nothing is hard-coded against a Strata version: the options come from the
+    CMakeLists.txt and setup.py of the tag asked for. The local manifest (written by
+    the last build) is used when it is for that same version, so a machine that is
+    offline still gets the list.
+    """
+    tag = tag or "main"
+    if tag in _options_cache:
+        return _options_cache[tag]
+    local = None
+    if MANIFEST.is_file():
+        try:
+            local = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            local = None
+    if local and (local.get("version") or "") == tag.lstrip("v"):
+        result = {**local, "tag": tag, "from": "the last build of this release"}
+        _options_cache[tag] = result
+        return result
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    from extract_build_options import diff, manifest  # a local tool, not a package
+
+    clone, error = fetch_release_files(tag)
+    if clone is None:
+        result = {"error": f"could not read {REPO}/{tag}: {error}", "tag": tag,
+                  "cmake_options": [], "setup_choices": [], "from": "unreachable"}
+    else:
+        try:
+            result = manifest(clone)
+        except Exception as exc:  # noqa: BLE001 - a release we cannot parse is reported, not raised
+            result = {"error": f"the release's files could not be read: {exc}", "tag": tag,
+                      "cmake_options": [], "setup_choices": [], "from": "unreachable"}
+        finally:
+            shutil.rmtree(clone, ignore_errors=True)   # tmp/ is scratch
+        result["tag"] = tag
+        result["from"] = "github"
+        if local:
+            result["changes"] = diff(local, result)
+    _options_cache[tag] = result
+    return result
+
+
+#: The five groups the Build tab lists. Everything else a setup.py accepts is
+#: counted and named in one line, not shown as a control.
+VISIBLE_GROUPS = ("model", "context", "kv-cache", "images", "experimental")
+#: Only for the case where tools/extract_build_options.py cannot be imported.
+_FALLBACK_NEEDLES = {"model": ("family", "model"), "context": ("context", "rope"),
+                     "kv-cache": ("kv",), "images": ("image", "vision"),
+                     "experimental": ("experimental",)}
+
+
+def choice_group(flag: str) -> str:
+    """What a setup.py flag is about. The tool that reads setup.py decides; this
+    function only falls back to its own names if that tool is not importable."""
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        from extract_build_options import setup_group  # a local tool, not a package
+        return setup_group(flag)
+    except Exception:  # noqa: BLE001 - a missing local tool must not break the tab
+        name = flag.lstrip("-").lower()
+        for group, needles in _FALLBACK_NEEDLES.items():
+            if any(needle in name for needle in needles):
+                return group
+        return "other"
+
+
+def normalise_choice(choice: dict[str, Any]) -> dict[str, Any]:
+    """Add the group and visibility a manifest written by an older build lacks.
+
+    config/build_options.json from before the Build tab listed choices has no
+    "group" or "visible" key; without these the card would show nothing at all.
+    """
+    if "group" in choice and "visible" in choice:
+        return choice
+    group = choice.get("group") or choice_group(choice.get("flag", ""))
+    visible = choice.get("visible")
+    if visible is None:
+        visible = group in VISIBLE_GROUPS
+    return {**choice, "group": group, "visible": bool(visible)}
+
+
+def setup_choices(options: dict[str, Any]) -> dict[str, Any]:
+    """The setup.py flags grouped the way the Build tab shows them.
+
+    Returns {"groups": {name: [flag, ...]}, "hidden": n}: the five groups a person
+    chooses before building are listed, the housekeeping flags (paths, ports, source
+    mirrors) are counted so the tab can say they exist rather than omit them.
+    """
+    choices = [normalise_choice(c) for c in options.get("setup_choices", []) if isinstance(c, dict)]
+    groups: dict[str, list[dict[str, Any]]] = {}
+    hidden = 0
+    for choice in choices:
+        if choice["visible"] and choice["group"] in VISIBLE_GROUPS:
+            groups.setdefault(choice["group"], []).append(choice)
+        else:
+            hidden += 1
+    return {"groups": groups, "hidden": hidden, "total": len(choices)}
 
 
 def published_digests(release: dict[str, Any]) -> dict[str, str]:
@@ -156,6 +304,7 @@ class BuildJob:
         self.log: list[str] = []
         self.log_path: Path | None = None   # the same lines, on disk, for a tail reader
         self.version: str | None = None
+        self.quant: str | None = None     # the quant this build is for, if one was named
         self.started: float | None = None
         self.result: dict[str, Any] | None = None
         self.proc: subprocess.Popen | None = None
@@ -211,6 +360,7 @@ class BuildJob:
         return {
             "state": self.state,
             "version": self.version,
+            "quant": self.quant,
             "elapsed_s": round(time.time() - self.started, 1) if self.started else 0,
             "log": self.log[-400:],
             "result": self.result,
@@ -247,7 +397,44 @@ class BuildJob:
         self.log_line("worker: not built - the engine runs in direct mode")
         return False
 
-    def start(self, tag: str, options: dict[str, Any]) -> dict[str, Any]:
+    def transfer_binaries(self, build_dir: Path, meta: dict[str, Any],
+                         quant: str | None) -> tuple[list[str], str | None]:
+        """Move the binaries a build produced into the store.
+
+        With a quant named they are kept under engine/versions/<quant>/ and that version
+        is made active, so a second quant can be built without losing the first. Without
+        one they are simply the default engine in engine/. Returns the files placed and
+        the key they were stored under.
+        """
+        built = [build_dir / name for name in (EXE, VEXE, WORKER) if (build_dir / name).is_file()]
+        ENGINE_DIR.mkdir(parents=True, exist_ok=True)
+        key = normalise_or_none(quant)
+        if quant and key is None:
+            self.log_line(f"quant {quant!r} is not a valid name. "
+                          "The build is stored as the default engine instead.")
+        copied: list[str] = []
+        if key:
+            # engine/strata is made to point at this build, so every run config that
+            # names engine/strata keeps working unchanged.
+            meta["quant"] = key
+            meta["label"] = key
+            entry = quant_store.store_binaries(key, built, meta)
+            copied = sorted(entry["files"])
+            self.log_line(f"stored engine/versions/{key}: {', '.join(copied)}")
+            chosen = quant_store.select(key)
+            self.log_line(f"active engine: {chosen['note']}"
+                         if chosen["active"] else f"could not activate {key}: {chosen['note']}")
+        else:
+            for src in built:
+                shutil.copy2(src, ENGINE_DIR / src.name)
+                copied.append(src.name)
+            (ENGINE_DIR / "BUILD.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+        return copied, key
+
+    def start(self, tag: str, options: dict[str, Any], quant: str | None = None) -> dict[str, Any]:
+        """Start a build. `quant` names the quant this engine is built for, so it is
+        stored under engine/versions/<quant> instead of overwriting the engine in engine/.
+        """
         with self.lock:
             if self.state not in ("idle", "done", "failed"):
                 return {"error": "a build is already running"}
@@ -256,12 +443,13 @@ class BuildJob:
             (ROOT / "logs").mkdir(parents=True, exist_ok=True)
             self.log_path = ROOT / "logs" / f"build-{tag}.log"
             self.version = tag
+            self.quant = normalise_or_none(quant)
             self.started = time.time()
             self.result = None
-        threading.Thread(target=self._run, args=(tag, options), daemon=True).start()
+        threading.Thread(target=self._run, args=(tag, options, self.quant), daemon=True).start()
         return self.status()
 
-    def _run(self, tag: str, options: dict[str, Any]) -> None:
+    def _run(self, tag: str, options: dict[str, Any], quant: str | None = None) -> None:
         clone = TMP_DIR / f"strata-{tag}"
         try:
             TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -307,12 +495,6 @@ class BuildJob:
 
             self.state = "transferring"
             ENGINE_DIR.mkdir(parents=True, exist_ok=True)
-            copied = []
-            for target, name in (("strata", EXE), ("strata-vision", VEXE), ("hypercore-worker", WORKER)):
-                src = build_dir / name
-                if src.is_file():
-                    shutil.copy2(src, ENGINE_DIR / name)
-                    copied.append(name)
             meta = {
                 "source": "built-from-source",
                 "version": m.get("version") or tag,
@@ -321,11 +503,12 @@ class BuildJob:
                 "worker": worker_built,
                 "built_at": _now(),
                 "src": hashlib.sha256((clone / "CMakeLists.txt").read_bytes()).hexdigest()[:16],
+                "options": options,
             }
-            (ENGINE_DIR / "BUILD.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+            copied, key = self.transfer_binaries(build_dir, meta, quant)
 
             self.clean_tmp()          # tmp/ is scratch: nothing at runtime reads it
-            self.result = {"copied": copied, "version": meta["version"]}
+            self.result = {"copied": copied, "version": meta["version"], "quant": key}
             self.state = "done"
         except Exception as exc:  # noqa: BLE001 - report it to the tab, do not take the server down
             self.state = "failed"

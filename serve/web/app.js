@@ -1032,6 +1032,9 @@ async function pollHook() {
   hookOffset = b.offset || hookOffset;
   hookLog(b.lines);
   hookState(b);
+  // The same job is shown on the Build tab; keep both cards in step so a setup
+  // started from here is reported there too.
+  renderBuildStatus(b, "setup");
   if (b.state !== "running") {
     clearInterval(hookTimer); hookTimer = null;
   }
@@ -2408,12 +2411,89 @@ $("assist-probe").onclick = async () => {   // time every model and re-pin the d
   }
 };
 
+// ------------------------------------------------------------------ model versions
+// One engine build per quant, stored under engine/versions/<quant> by serve/quant_store.py.
+// The header dropdown lists every version this machine can start; choosing one places that
+// build's binaries at engine/strata and restarts the engine with the run config that belongs
+// to it. GET /versions, POST /versions/select.
+let versions = [];
+
+function versionLabel(v) {
+  const bits = [v.label || v.key];
+  if (v.quant && v.quant !== (v.label || "")) bits.push(v.quant);
+  if (v.version) bits.push(`engine ${v.version}`);
+  return bits.join(" · ");
+}
+
+function renderVersions(active) {
+  const sel = $("version-select");
+  if (!sel) return;
+  sel.innerHTML = "";
+  if (!versions.length) {
+    sel.innerHTML = '<option value="">no model versions built</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  for (const v of versions) {
+    const opt = document.createElement("option");
+    opt.value = v.key;
+    opt.textContent = versionLabel(v) + (v.ready ? "" : " (no engine binary)") + (v.active ? " - running" : "");
+    sel.appendChild(opt);
+  }
+  sel.value = (active || versions[0]).key;
+  const quantField = $("build-quant");
+  if (quantField && !quantField.value) quantField.value = (active && (active.quant || active.key)) || "";
+}
+
+async function loadVersions() {
+  const sel = $("version-select");
+  if (!sel) return;
+  try {
+    const r = await fetch("versions", { headers: headers() });
+    const data = await r.json();
+    versions = data.versions || [];
+    renderVersions(data.active);
+  } catch (e) {
+    sel.innerHTML = '<option value="">no model versions found</option>';
+    sel.disabled = true;
+  }
+}
+
+$("version-select").onchange = async () => {
+  const key = $("version-select").value;
+  if (!key) return;
+  const sel = $("version-select");
+  sel.disabled = true;
+  setPill("queued", `Starting ${key}`);
+  try {
+    const r = await fetch("versions/select", { method: "POST", headers: headers(true),
+                                             body: JSON.stringify({ version: key }) });
+    const out = await r.json();
+    if (r.ok) {
+      toast("success", "Model version", out.message || `${key} is loading`);
+      setPill("idle", `${key}: loading the model`);
+    } else {
+      toast("warn", "That version did not start", out.error ? out.error.message : String(out.message || ""));
+      setPill("error", "Model version failed");
+    }
+    versions = out.versions || versions;
+    renderVersions(versions.find((v) => v.active));
+  } catch (e) {
+    toast("warn", "The version switch failed", String(e));
+    setPill("error", "Model version failed");
+  } finally {
+    sel.disabled = false;
+  }
+};
+
 // ------------------------------------------------------------------ start
 setBusy(false);
 renderChat();
 const startQuestion = new URLSearchParams(location.search).get("q");   // /?q=... starts a chat (a shortcut)
 if (startQuestion) history.replaceState(null, "", location.pathname + location.hash);
 loadHealth().then(() => { loadMcp(); loadPrompts(); }).then(() => { if (startQuestion) { $("input").value = startQuestion; send(); } });
+loadVersions();
 showTab(location.hash.slice(1) || "chat");
 poll();
 
@@ -2542,12 +2622,271 @@ function loadBuild() {
         : `The engine is the latest release (${inst.version}).`;
     }
     renderBuildOptions(s.options);
+    renderBuildChoices(s.setup, inst.version || "main", (s.options || {}).error);
     renderBuildLog(s.job);
+    renderBuildStatus(s.job || { state: "idle" }, "source");
+    refreshBuildStatus();
   }).catch((e) => {
     $("build-tag").innerHTML = `<option value="main">main (the current source)</option>`;
     $("build-update-note").textContent = `could not read the build status: ${String(e.message || e)}`;
   });
 }
+
+/* The choices a release's setup.py accepts. They are read from that release's own
+   setup.py (raw.githubusercontent, not a clone), so the card is filled before any
+   build starts. The command line at the bottom is what those boxes mean: it is the
+   exact call the setup hook would make. */
+const CHOICE_ORDER = ["model", "context", "kv-cache", "images", "experimental"];
+const CHOICE_TITLE = { model: "Model and quant", context: "Context", "kv-cache": "KV cache",
+                       images: "Images", experimental: "Experimental" };
+const IMAGE_DEPENDENT_FLAGS = new Set([
+  "--image-quant", "--image-backend", "--image-native", "--image-gpu-policy",
+  "--vision-tokens"
+]);
+const IMAGE_OFF_VALUES = new Set(["no", "none", "off"]);
+const DEFAULT_OFF_FLAGS = new Set([
+  "--vision", "--images", "--image-native", "--experimental-speed-projection"
+]);
+
+function isOffValue(value) {
+  return IMAGE_OFF_VALUES.has(String(value || "").toLowerCase());
+}
+
+function defaultChoiceValue(c) {
+  if (c.default !== null && c.default !== undefined) return c.default;
+  if (c.flag === "--vision" || c.flag === "--images") {
+    return (c.choices || []).find((v) => IMAGE_OFF_VALUES.has(String(v).toLowerCase())) || "";
+  }
+  return "";
+}
+
+function choiceField(c) {
+  const name = c.flag.replace(/^--/, "").replace(/-/g, " ");
+  if (c.choices && c.choices.length) {
+    const selected = defaultChoiceValue(c);
+    const emptyOption = selected === "" ? `<option value="" selected>not set</option>` : "";
+    return `<label>${esc(name)}<select data-flag="${esc(c.flag)}">` +
+      emptyOption +
+      c.choices.map((v) => `<option value="${esc(v)}"${v === selected ? " selected" : ""}>${esc(v)}</option>`).join("") +
+      `</select><code>${esc(c.flag)}</code>${c.help ? `<span class="muted small">${esc(c.help)}</span>` : ""}</label>`;
+  }
+  const input = c.type === "int" ? "number" : "text";
+  const hint = c.metavar ? esc(c.metavar) : "a value";
+  return `<label>${esc(name)}<input type="${input}" data-flag="${esc(c.flag)}" value="${esc(c.default ?? "")}" placeholder="${hint}">` +
+    `<code>${esc(c.flag)}</code>${c.help ? `<span class="muted small">${esc(c.help)}</span>` : ""}</label>`;
+}
+
+function activeBuildArgs() {
+  const controls = Array.from(document.querySelectorAll("#build-choices-groups [data-flag]"));
+  const images = controls.find((el) => el.dataset.flag === "--images");
+  const vision = controls.find((el) => el.dataset.flag === "--vision");
+  const imageOff = !images || isOffValue(images.value);
+  const visionOff = !vision || isOffValue(vision.value);
+  const args = [];
+
+  controls.forEach((el) => {
+    const flag = el.dataset.flag;
+    const value = el.value;
+    if (value === "") return;
+    if (IMAGE_DEPENDENT_FLAGS.has(flag)) {
+      const dependentOff = flag === "--vision-tokens" ? visionOff : imageOff;
+      if (dependentOff) return;
+    }
+    if (DEFAULT_OFF_FLAGS.has(flag) && isOffValue(value)) return;
+    args.push(flag, value);
+  });
+  return args;
+}
+
+function refreshImageControls() {
+  const controls = Array.from(document.querySelectorAll("#build-choices-groups [data-flag]"));
+  const images = controls.find((el) => el.dataset.flag === "--images");
+  const vision = controls.find((el) => el.dataset.flag === "--vision");
+  const imageOff = !images || isOffValue(images.value);
+  const visionOff = !vision || isOffValue(vision.value);
+
+  controls.forEach((el) => {
+    if (!IMAGE_DEPENDENT_FLAGS.has(el.dataset.flag)) return;
+    const off = el.dataset.flag === "--vision-tokens" ? visionOff : imageOff;
+    el.disabled = off;
+    if (off) el.value = "";
+  });
+}
+
+// serve/strata_hook.py adds these to every setup it starts: a detached setup has no
+// terminal, so --yes answers every question the boxes above left unset with the answer
+// setup.py recommends for this machine, and --no-start does not launch an engine on a
+// card the WebUI or a tune is holding. choiceCommand shows them so the line under the
+// boxes is the line that actually runs.
+const HOOK_FLAGS = ["--yes", "--no-start"];
+
+function choiceCommand() {
+  const args = activeBuildArgs();
+  return ["python setup.py", ...args, ...HOOK_FLAGS.filter((f) => !args.includes(f))].join(" ");
+}
+
+function renderBuildChoices(setup, tag, error) {
+  const card = $("build-choices");
+  if (!card) return;
+  const groups = (setup && setup.groups) || {};
+  const shown = CHOICE_ORDER.filter((g) => (groups[g] || []).length);
+  if (!shown.length) {
+    card.hidden = false;
+    $("build-choices-tag").textContent = tag;
+    $("build-choices-groups").innerHTML = "";
+    $("build-choices-rest").textContent = error
+      ? `${error} The choices for ${tag} are unknown until that release is read.`
+      : `${tag} has no setup.py choice lists.`;
+    $("build-choices-command").textContent = "";
+    return;
+  }
+  card.hidden = false;
+  $("build-choices-tag").textContent = tag;
+  $("build-choices-groups").innerHTML = shown.map((g) =>
+    `<div class="build-choices-group"><span class="build-choices-group__title">${esc(CHOICE_TITLE[g] || g)}</span>` +
+    groups[g].map(choiceField).join("") + `</div>`).join("");
+  const listed = shown.reduce((n, g) => n + groups[g].length, 0);
+  const rest = (setup.total || 0) - listed;
+  $("build-choices-rest").textContent = rest > 0
+    ? `${rest} further ${rest === 1 ? "flag" : "flags"} (paths, ports, GPU selection, source mirrors) are accepted by that setup.py and are not shown here.`
+    : "";
+  refreshImageControls();
+  $("build-choices-command").textContent = choiceCommand();
+}
+
+$("build-tag").addEventListener("change", async () => {
+  const tag = $("build-tag").value;
+  $("build-choices-note").textContent = `reading ${tag}'s setup.py ...`;
+  try {
+    const r = await fetch(`build/options?tag=${encodeURIComponent(tag)}`, { headers: headers() });
+    const options = await r.json();
+    $("build-choices-note").textContent = options.error || "";
+    renderBuildOptions(options);
+    renderBuildChoices(options.setup, tag, options.error);
+  } catch (e) {
+    $("build-choices-note").textContent = `could not read ${tag}: ${String(e.message || e)}`;
+  }
+});
+
+$("build-choices-groups").addEventListener("change", () => {
+  refreshImageControls();
+  $("build-choices-command").textContent = choiceCommand();
+});
+
+/* ---------------------------------------------------------------- a build in the background
+"Run setup with these" and "Clone and build from source" both start a job the server
+runs detached: setup.py through serve/strata_hook.py, the clone-configure-build-transfer
+through serve/build_api.py. While one of them is running the button that started it
+reads "Kill Build" and stops it, and the status card under the boxes says which step
+the job is on, how long it has been going and what it has complained about. The stage
+comes from the job itself - setup.py's own "=== Step N: ... ===" markers, or the build
+job's own state - never from a list maintained here. */
+let setupOffset = 0, setupTimer = null;
+let setupState = "idle", sourceState = "idle";
+const IDLE_LABEL = { setup: "Run setup with these", source: "Clone and build from source" };
+const SOURCE_STAGE = {
+  cloning: "cloning the release", configuring: "configuring with cmake",
+  building: "compiling", transferring: "moving the binaries into engine/",
+};
+const MAX_STATUS_PROBLEMS = 20;
+
+// A source build reports its stage as its state (cloning, configuring, building,
+// transferring); the setup hook reports running plus a stage read from its log.
+function isRunning(b, kind) {
+  return b.state === "running" || (kind === "source" && Boolean(SOURCE_STAGE[b.state]));
+}
+
+function stageText(b, kind) {
+  if (isRunning(b, kind)) {
+    const base = kind === "setup" ? (b.stage || "setup.py has started")
+                                  : (SOURCE_STAGE[b.state] || "the build is running");
+    if (typeof b.percent === "number" && b.download) return `${base} - ${b.percent}% of ${b.download}`;
+    return base;
+  }
+  if (b.state === "done") return `finished in ${b.elapsed_s || 0}s`;
+  if (b.state === "failed") return `stopped with an error (exit ${b.exit_code})`;
+  if (b.state === "cancelled") return "stopped";
+  return b.note || "not started";
+}
+
+function renderBuildStatus(b, kind) {
+  const card = $("build-status");
+  if (!card || !b) return;
+  const running = isRunning(b, kind);
+  if (kind === "setup") setupState = b.state; else sourceState = b.state;
+  const button = $(kind === "setup" ? "setup-run" : "build-start");
+  if (button) {
+    button.textContent = running ? "Kill Build" : IDLE_LABEL[kind];
+    button.classList.toggle("st-btn--danger", running);
+  }
+  card.hidden = b.state === "idle";
+  card.dataset.state = b.state;
+  $("build-status-stage").textContent = stageText(b, kind);
+  $("build-status-elapsed").textContent = running ? `running for ${b.elapsed_s || 0}s` : "";
+  const problems = (b.problems || []).slice(-MAX_STATUS_PROBLEMS);
+  const list = $("build-status-problems");
+  list.hidden = !problems.length;
+  list.innerHTML = problems.map((p) =>
+    `<li class="${p.kind === "warning" ? "warning" : "error"}">${esc(p.text)}</li>`).join("");
+}
+
+async function pollBuildStatus() {
+  let r;
+  try { r = await fetch(`config/strata-hook?offset=${setupOffset}`, { headers: headers() }); }
+  catch (e) { return; }          // the server is not answering; the card keeps what it showed
+  if (!r.ok) return;
+  const b = await r.json();
+  setupOffset = b.offset || setupOffset;
+  renderBuildStatus(b, "setup");
+  if (b.state !== "running") {
+    clearInterval(setupTimer); setupTimer = null;
+    loadBuild();                 // the tab shows what the setup left behind
+  }
+}
+
+// A setup that is already running when the page opens (a tab reload, another machine's
+// request) still needs its status card, and its button needs to read Kill Build.
+async function refreshBuildStatus() {
+  try {
+    const r = await fetch("config/strata-hook?offset=0", { headers: headers() });
+    if (!r.ok) return;
+    const b = await r.json();
+    renderBuildStatus(b, "setup");
+    if (b.state === "running" && !setupTimer) setupTimer = setInterval(pollBuildStatus, 2000);
+  } catch (e) { /* status is a convenience; the log card is the record */ }
+}
+
+$("setup-run").addEventListener("click", async () => {
+  if (setupState === "running") {
+    // Kill Build: stop the setup this button started.
+    try {
+      const r = await fetch("config/strata-hook/stop", { method: "POST", headers: headers(true), body: "{}" });
+      const b = await r.json();
+      if (!r.ok) toast("error", "The build was not stopped", (b.error || "").trim() || `HTTP ${r.status}`, 8000);
+    } catch (e) {
+      toast("error", "The build was not stopped", String(e.message || e), 8000);
+    }
+    pollBuildStatus();
+    return;
+  }
+  const args = activeBuildArgs();
+  $("build-choices-note").textContent = "starting the setup hook ...";
+  try {
+    const r = await fetch("config/strata-hook", { method: "POST", headers: headers(true), body: JSON.stringify({ args })});
+    const b = await r.json();
+    if (!r.ok) { toast("error", "The setup hook did not start", (b.error || "").trim() || `HTTP ${r.status}`, 8000); return; }
+    // Say which folder is being set up: the hook runs the Strata checkout this machine
+    // has, which is not necessarily the release the boxes above were read from.
+    $("build-choices-note").textContent = `setup.py is running in ${b.checkout || "the Strata folder"}, logging to ${b.log}`;
+    setupOffset = 0;
+    renderBuildStatus(b, "setup");
+    clearInterval(setupTimer);
+    setupTimer = setInterval(pollBuildStatus, 2000);
+    pollBuildStatus();
+  } catch (e) {
+    toast("error", "The setup hook did not start", String(e.message || e), 8000);
+  }
+});
 
 function renderBuildOptions(options) {
   if (!options) return;
@@ -2599,15 +2938,26 @@ $("build-fetch").onclick = async () => {
   loadBuild();
 };
 $("build-start").onclick = async () => {
+  if (SOURCE_STAGE[sourceState]) {
+    // Kill Build: the clone-configure-build-transfer is in progress.
+    try { await fetch("build/cancel", { method: "POST", headers: headers(true), body: "{}" }); } catch (e) { /* the log says what happened */ }
+    pollBuildLog();
+    return;
+  }
   const options = {};
   document.querySelectorAll("[data-opt]").forEach((el) => { options[el.dataset.opt] = el.value; });
   const r = await fetch("build/start", {
-    method: "POST", headers: headers(true), body: JSON.stringify({ tag: $("build-tag").value, options })});
-  renderBuildLog(await r.json());
+    method: "POST", headers: headers(true),
+    body: JSON.stringify({ tag: $("build-tag").value, options,
+                          quant: ($("build-quant") ? $("build-quant").value.trim() : "") })});
+  const job = await r.json();
+  renderBuildLog(job);
+  renderBuildStatus(job, "source");
   buildOffset = 0;
   const poll = setInterval(async () => {
     const s = await pollBuildLog();
-    if (s.state === "done" || s.state === "failed") { clearInterval(poll); loadBuild(); }
+    renderBuildStatus(s, "source");
+    if (s.state === "done" || s.state === "failed" || s.state === "cancelled") { clearInterval(poll); loadBuild(); }
   }, 3000);
 };
 

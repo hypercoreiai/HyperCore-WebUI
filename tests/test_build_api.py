@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
 
-from serve import build_api
+from serve import build_api, quant_store
 from serve.build_api import BuildJob
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -148,6 +149,117 @@ class StatusTests(unittest.TestCase):
         self.assertFalse(build_api.build_status()["update_available"])
 
 
+class OptionsTests(unittest.TestCase):
+    """The choices of a release are read before any build, without cloning it."""
+
+    SETUP = """
+import argparse
+FAMILIES = {"qwen": {}, "swift": {}}
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--family", choices=list(FAMILIES), help="which model")
+    ap.add_argument("--model", choices=["Q2_0", "IQ3_XXS"], help="which quant")
+    ap.add_argument("--context", type=int, help="context length")
+    ap.add_argument("--kv", choices=["int8", "q4_0"], help="KV cache")
+    ap.add_argument("--images", choices=["qwen-image", "no"])
+    ap.add_argument("--experimental-speed-projection", metavar="on|off|GGUF")
+    ap.add_argument("--port", type=int)
+"""
+
+    def setUp(self) -> None:
+        self.tmp = Path(__import__("tempfile").mkdtemp())
+        self.clone = self.tmp / "release"
+        self.clone.mkdir()
+        (self.clone / "setup.py").write_text(self.SETUP, encoding="utf-8")
+        (self.clone / "CMakeLists.txt").write_text(
+            'project(Strata VERSION 0.1.45)\noption(STRATA_ENABLE_CUDA "CUDA" OFF)\n', encoding="utf-8")
+        self.original_fetch = build_api.fetch_release_files
+        build_api.fetch_release_files = lambda tag: (self.clone, "")
+        build_api._options_cache.clear()
+        build_api.MANIFEST = self.tmp / "build_options.json"
+
+    def tearDown(self) -> None:
+        build_api.fetch_release_files = self.original_fetch
+        build_api.MANIFEST = ROOT / "config" / "build_options.json"
+        build_api._options_cache.clear()
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_release_is_read_from_its_own_files(self) -> None:
+        options = build_api.options_for("v0.1.45")
+        self.assertEqual(options["tag"], "v0.1.45")
+        self.assertEqual(options["from"], "github")
+        flags = {c["flag"] for c in options["setup_choices"]}
+        for flag in ("--family", "--model", "--context", "--kv", "--images",
+                     "--experimental-speed-projection"):
+            self.assertIn(flag, flags)
+        groups = build_api.setup_choices(options)["groups"]
+        self.assertEqual(groups["model"][0]["choices"], ["qwen", "swift"])
+        self.assertEqual(groups["experimental"][0]["choices"], ["on", "off", "GGUF"])
+        self.assertEqual(build_api.setup_choices(options)["hidden"], 1)  # --port
+
+    def test_a_second_ask_for_the_same_tag_is_not_fetched_again(self) -> None:
+        calls = []
+        build_api.fetch_release_files = lambda tag: (calls.append(tag) or (self.clone, ""))
+        build_api.options_for("v0.1.46")
+        build_api.options_for("v0.1.46")
+        self.assertEqual(calls, ["v0.1.46"])
+
+    def test_no_network_still_gives_the_choices_of_the_last_build(self) -> None:
+        build_api.MANIFEST.write_text(json.dumps({"version": "0.1.45", "cmake_options": [],
+                                                 "setup_choices": [{"flag": "--kv", "group": "kv-cache",
+                                                                   "choices": ["int8"], "visible": True}]}),
+                                     encoding="utf-8")
+        options = build_api.options_for("v0.1.45")
+        self.assertEqual(options["from"], "the last build of this release")
+        self.assertEqual(build_api.setup_choices(options)["groups"]["kv-cache"][0]["flag"], "--kv")
+
+    def test_an_unreachable_release_is_reported_not_raised(self) -> None:
+        build_api.fetch_release_files = lambda tag: (None, "timed out")
+        options = build_api.options_for("v9.9.9")
+        self.assertIn("could not read", options["error"])
+        self.assertEqual(options["cmake_options"], [])
+        self.assertEqual(build_api.setup_choices(options), {"groups": {}, "hidden": 0, "total": 0})
+
+    def test_build_status_carries_the_grouped_choices(self) -> None:
+        options = build_api.options_for("v0.1.45")
+        build_api.MANIFEST.write_text(json.dumps(options), encoding="utf-8")
+        original = build_api.latest_release
+        build_api.latest_release = lambda: {"repo": "x", "releases": []}
+        try:
+            payload = build_api.build_status()
+        finally:
+            build_api.latest_release = original
+        self.assertIn("groups", payload["setup"])
+        self.assertIn("model", payload["setup"]["groups"])
+        self.assertGreaterEqual(payload["setup"]["total"], 6)
+
+    def test_a_manifest_without_groups_is_grouped_before_it_is_shown(self) -> None:
+        """config/build_options.json written by an older build has no group or visible
+        key; the card would show nothing unless the flag names are read again."""
+        build_api.MANIFEST.write_text(json.dumps({
+            "version": "0.1.45",
+            "cmake_options": [],
+            "setup_choices": [
+                {"flag": "--family", "choices": None, "type": None, "default": None, "help": ""},
+                {"flag": "--model", "choices": None, "type": None, "default": None, "help": ""},
+                {"flag": "--context", "choices": None, "type": "int", "default": None, "help": ""},
+                {"flag": "--kv", "choices": ["int8", "q4_0"], "type": None, "default": None, "help": ""},
+                {"flag": "--image-native", "choices": ["on", "off"], "type": None, "default": None, "help": ""},
+                {"flag": "--experimental-speed-projection", "choices": None, "type": None,
+                 "default": None, "help": "EXPERIMENTAL"},
+                {"flag": "--port", "choices": None, "type": "int", "default": None, "help": ""},
+            ],
+        }), encoding="utf-8")
+        setup = build_api.setup_choices(build_api.options_for("v0.1.45"))
+        self.assertEqual(sorted(set(setup["groups"]) - {"model", "context", "kv-cache",
+                                                        "images", "experimental"}), [])
+        for group in ("model", "context", "kv-cache", "images", "experimental"):
+            self.assertTrue(setup["groups"][group], f"the {group} group is empty")
+        self.assertEqual(setup["hidden"], 1)  # --port is housekeeping, not a choice
+        self.assertEqual(setup["total"], 7)
+
+
 class ScratchContractTests(unittest.TestCase):
     """tmp/ is scratch: nothing that serves a request may read it."""
 
@@ -163,6 +275,78 @@ class ScratchContractTests(unittest.TestCase):
             source = (ROOT / name).read_text(encoding="utf-8")
             self.assertNotIn('ROOT / "tmp"', source, f"{name} reads the scratch folder")
             self.assertNotIn("tmp/strata", source, f"{name} reads a build clone")
+
+
+class TransferTests(unittest.TestCase):
+    """A build named by quant is stored per quant, and engine/strata points at it."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved = (build_api.ENGINE_DIR, quant_store.ENGINE_DIR, quant_store.VERSIONS_DIR,
+                      quant_store.INDEX_PATH, quant_store.CONFIG_DIR)
+        build_api.ENGINE_DIR = self.tmp / "engine"
+        quant_store.ENGINE_DIR = self.tmp / "engine"
+        quant_store.VERSIONS_DIR = self.tmp / "engine" / "versions"
+        quant_store.INDEX_PATH = self.tmp / "engine" / "VERSIONS.json"
+        quant_store.CONFIG_DIR = self.tmp / "config"
+        self.build_dir = self.tmp / "build"
+        self.build_dir.mkdir()
+        (self.build_dir / "strata").write_bytes(b"engine binary")
+        (self.build_dir / "hypercore-worker").write_bytes(b"worker binary")
+        self.meta: dict[str, Any] = {"version": "0.1.45", "source": "built-from-source", "worker": True}
+        self.job = BuildJob()
+
+    def tearDown(self) -> None:
+        (build_api.ENGINE_DIR, quant_store.ENGINE_DIR, quant_store.VERSIONS_DIR,
+         quant_store.INDEX_PATH, quant_store.CONFIG_DIR) = self.saved
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_quant_build_is_stored_and_made_active(self) -> None:
+        copied, key = self.job.transfer_binaries(self.build_dir, self.meta, "IQ2_S")
+        self.assertEqual(key, "iq2_s")
+        self.assertEqual(sorted(copied), ["hypercore-worker", "strata"])
+        stored = quant_store.VERSIONS_DIR / "iq2_s"
+        self.assertTrue((stored / "strata").is_file())
+        self.assertTrue((stored / "BUILD.json").is_file())
+        self.assertTrue((quant_store.ENGINE_DIR / "strata").is_file())
+        self.assertEqual((quant_store.ENGINE_DIR / "strata").read_bytes(), b"engine binary")
+        self.assertEqual(quant_store.index()["active"], "iq2_s")
+        self.assertIn("stored engine/versions/iq2_s", "\n".join(self.job.log))
+        meta = json.loads((quant_store.ENGINE_DIR / "BUILD.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["quant"], "iq2_s")
+
+    def test_two_quants_do_not_overwrite_each_other(self) -> None:
+        self.job.transfer_binaries(self.build_dir, {**self.meta, "label": "q2_0"}, "q2_0")
+        other = self.tmp / "build2"
+        other.mkdir()
+        (other / "strata").write_bytes(b"iq2 engine")
+        self.job.transfer_binaries(other, self.meta, "IQ2_S")
+        self.assertEqual((quant_store.VERSIONS_DIR / "q2_0" / "strata").read_bytes(), b"engine binary")
+        self.assertEqual((quant_store.VERSIONS_DIR / "iq2_s" / "strata").read_bytes(), b"iq2 engine")
+        self.assertEqual(sorted(quant_store.index()["versions"]), ["iq2_s", "q2_0"])
+        self.assertEqual(quant_store.index()["active"], "iq2_s")
+
+    def test_no_quant_is_the_old_behaviour(self) -> None:
+        copied, key = self.job.transfer_binaries(self.build_dir, self.meta, None)
+        self.assertIsNone(key)
+        self.assertEqual(sorted(copied), ["hypercore-worker", "strata"])
+        self.assertTrue((build_api.ENGINE_DIR / "strata").is_file())
+        self.assertFalse(quant_store.VERSIONS_DIR.exists())
+        self.assertEqual(json.loads((build_api.ENGINE_DIR / "BUILD.json").read_text())["version"], "0.1.45")
+
+    def test_a_bad_quant_name_is_not_fatal(self) -> None:
+        copied, key = self.job.transfer_binaries(self.build_dir, self.meta, "q2 0%!")
+        self.assertIsNone(key)
+        self.assertEqual(copied, ["strata", "hypercore-worker"])
+        self.assertTrue((build_api.ENGINE_DIR / "strata").is_file())
+        self.assertIn("is not a valid name", "\n".join(self.job.log))
+
+    def test_the_quant_is_reported_in_the_job_status(self) -> None:
+        job = BuildJob()
+        job.quant = build_api.normalise_or_none("Q4_K_M")
+        self.assertEqual(job.status()["quant"], "q4_k_m")
+        self.assertIsNone(BuildJob().status()["quant"])
 
 
 if __name__ == "__main__":

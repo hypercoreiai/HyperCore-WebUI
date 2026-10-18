@@ -24,8 +24,48 @@ engine, plus two tabs the engine does not ship: Tune and Build.
 - **Build tab**: version check against the Niko1221/Strata releases, ready-made
   download with SHA-256 verification, or a from-source build whose dropdowns are
   extracted from that release's own `CMakeLists.txt` and `setup.py` and diffed
-  against the previous manifest. One clone in `tmp/` at a time; it is deleted when
-  the build finishes and nothing at runtime reads it.
+  against the previous manifest. The releases box is a list of every published tag
+  with `main` as the fallback, so it is never empty offline. A **Setup choices** card
+  sits under it: the model, quant, context, KV cache, image and experimental flags of
+  the selected release are read from that release's own `setup.py` (a raw file fetch,
+  not a clone) before anything is built, each one shown as a control with the command
+  line they stand for, and `Run setup with these` posts them to the setup hook. The default is no images: image controls are left unset or shown as `no`, dependent image controls are disabled while images are off, and the hook is sent no image flags unless an image choice is explicitly selected. Flags
+  that are housekeeping (paths, ports, mirrors) are counted in one line rather than
+  listed. The hook finds the checkout it can run: the path the request names, then
+  `HYPERCORE_STRATA_SRC`, then the `cwd` of the run config the server is using (that
+  is the Strata folder the engine runs from), then `strata/` in this project, then a
+  Strata folder beside it. `tmp/` is never a candidate, and when it is the only clone
+  on the machine the message says so rather than just "no checkout". A setup
+  started from the page is never interactive: `--yes` and `--no-start` are added to the
+  command the page sends (a flag already there is not repeated) and stdin is closed, so a
+  question the boxes left unanswered takes the answer `setup.py` recommends for this
+  machine instead of waiting on a prompt nobody can type into. The command shown under the
+  boxes is the command that runs, hook flags included. While a build runs in the
+  background the button that started it reads **Kill Build** and stops it, and a status
+  card under the boxes says which step `setup.py` has reached (read from its own
+  `=== Step N: ... ===` markers, not from a list we maintain), how long it has been
+  going, the percent of a download in progress, and every `[X]`, `[!]` or traceback it
+  printed. A from-source build reports its own stage (cloning, configuring, compiling,
+  transferring) in the same card. One
+  clone in `tmp/` at a time; it is deleted when the build finishes and nothing at
+  runtime reads it.
+- **Model versions, one engine build per quant**: `serve/quant_store.py` stores a build
+  under `engine/versions/<quant>/` with its own `BUILD.json`, and `engine/VERSIONS.json`
+  records which one is active. `engine/strata` is materialised from the active build
+  (symlink on Linux, copy on Windows), so every existing run config keeps saying
+  `engine/strata`. The header has a **Model version** dropdown fed by `GET /versions`
+  and `POST /versions/select`: choosing a version places that build's binaries, points
+  the engine at the run config that names that quant, and restarts it; with no engine
+  loaded the version is set and the Load button starts it. The Build tab's *Build for
+  quant* field is what names the quant a build is stored under. A missing or corrupt
+  `VERSIONS.json` is rebuilt by scanning `engine/versions/` and `config/`. Tests:
+  `tests/test_quant_store.py` (15 cases), `tests/test_version_routes.py` (6 cases
+  against a `--ui-only` server), `tests/test_version_dropdown.js`, and five cases in
+  `tests/test_build_api.py` that build a fake `build/` directory and check that a named
+  quant is stored under `engine/versions/<quant>/`, that two quants do not overwrite each
+  other, and that an unquantised build behaves exactly as before. Also fixed: `serve/build_api.py` used an undefined
+  `UA` constant in the GitHub request headers, so every release-file fetch fell into
+  its "could not reach GitHub" branch; the user agent is now defined.
 - **Tune tab**: `optuna_tune/bayesian_tune.py` as a background subprocess, with the
   chat engine unloaded first, live trial rows read from the CLI's own stdout, the
   winner's benchmark, and export of the run config pair. The pin boxes are filled
@@ -104,6 +144,12 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   several models can turn it off once instead of in every config. The decision is a single
   function, `serve/server.py:resolve_turn_tail`, and the server says out loud when the switch
   overrode a request (`tests/test_turn_tail_check.py`).
+- **The Build tab had no scrollbar.** `body` is `overflow: hidden` and `main` is a fixed-height
+  flex row, and only the Monitor, About and Assist views carried their own `overflow-y: auto`.
+  The Build tab is taller than the screen as soon as the setup-choices and build-options cards
+  fill in, so everything below the fold was unreachable. `.view--build` and `.view--tune` now
+  scroll like the other tabs and take the same centred 1240px column and card spacing as the
+  Monitor (`tests/test_build_tab_scroll.js`).
 - **The Build tab's release dropdown was empty.** `GET /build/status` put the newest
   single release under `latest` while the page read `latest.releases`, so the box never
   filled and the note fell back to "could not reach GitHub". The route now returns the

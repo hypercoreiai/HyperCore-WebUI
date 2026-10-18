@@ -48,7 +48,7 @@ from collections.abc import Iterator
 from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,7 +62,7 @@ from serve import (
 )
 from serve import prompts as agent_prompts
 from serve import responses as responses_api
-from serve import build_api, chat_archive, strata_hook, tune_api
+from serve import build_api, chat_archive, quant_store, strata_hook, tune_api
 from serve.offline_engine import (DEFAULT_RETRY_S, EngineRetry, EngineUnavailable, OfflineEngine,
                                  UNLOADED_CODE)
 from serve.frontend import (
@@ -3832,6 +3832,12 @@ def make_handler(svc: Service):
                 if self._authorized():
                     self._json(200, build_api.build_status())
                 return
+            if path == "/versions":
+                # every model version this machine can start: the engine builds stored
+                # per quant and the run configs that name one (serve/quant_store.py)
+                if self._authorized():
+                    self._json(200, quant_store.view())
+                return
             if path == "/tune/status":
                 if self._authorized():
                     self._json(200, tune_api.JOB.status())
@@ -3853,9 +3859,18 @@ def make_handler(svc: Service):
                                      "deliverables": tune_api.deliverables(model)})
                 return
             if path == "/build/options":
+                # the build and setup choices of a release. With ?tag=<release> they are
+                # read from that release's own CMakeLists.txt and setup.py, without cloning
+                # it, so the tab can list them before any build starts.
                 if self._authorized():
-                    self._json(200, json.loads(build_api.MANIFEST.read_text(encoding="utf-8"))
-                              if build_api.MANIFEST.is_file() else {"cmake_options": []})
+                    tag = parse_qs(urlsplit(self.path).query).get("tag", [""])[0]
+                    if not tag:
+                        self._json(200, json.loads(build_api.MANIFEST.read_text(encoding="utf-8"))
+                                   if build_api.MANIFEST.is_file() else {"cmake_options": [], "setup_choices": []})
+                        return
+                    options = build_api.options_for(tag)
+                    self._json(200 if not options.get("error") else 502,
+                              {**options, "setup": build_api.setup_choices(options)})
                 return
             if path == "" or (path == "/api-monitor" and svc.api_monitor):
                 body = (ROOT / "serve" / "web" / ("monitor.html" if path else "index.html")).read_bytes()
@@ -4020,7 +4035,8 @@ def make_handler(svc: Service):
                 if not isinstance(args, list):
                     args = None
                 result = strata_hook.JOB.start(str(body.get("path") or "") or None,
-                                             [str(a) for a in args] if args else None)
+                                             [str(a) for a in args] if args else None,
+                                             run_config=svc.config_path)
                 self._json(200 if result.get("state") == "running" else 400, result)
                 return
             if path == "/config/strata-hook/stop":
@@ -4106,7 +4122,25 @@ def make_handler(svc: Service):
                     return
                 if path == "/build/start":
                     self._json(200, build_api.JOB.start(str(req.get("tag") or "main"),
-                                                       req.get("options") or {}))
+                                                       req.get("options") or {},
+                                                       req.get("quant")))
+                    return
+                if path == "/versions/select":
+                    # start one of the stored quant builds: place its binaries, point
+                    # the engine at its run config, restart it. The app stays up either way.
+                    wanted = str(req.get("version") or req.get("quant") or "").strip()
+                    if not wanted:
+                        self._json(400, {"error": {"message": 'send {"version": "q2_0"}'}})
+                        return
+                    try:
+                        entry = quant_store.select(wanted)
+                    except ValueError as exc:
+                        self._json(400, {"error": {"message": str(exc)}})
+                        return
+                    ok, note = apply_model_version(svc, entry)
+                    self._json(200 if ok else 503, {"status": "switching" if ok else "failed",
+                                                   "version": entry["key"], "model": svc.model,
+                                                   "message": note, "versions": quant_store.list_versions()})
                     return
                 if path == "/build/log":
                     # the tail from a byte offset, so the tab appends instead of re-reading
@@ -5338,6 +5372,73 @@ def engine_binary(cfg: dict) -> str | None:
         if candidate and Path(candidate).is_file():
             return str(candidate)
     return None
+
+
+def point_engine_at_config(engine: Any, cfg: dict[str, Any]) -> None:
+    """Give an engine object the run config it should run next.
+
+    Every engine the server can hold - the worker supervisor, serve/direct_engine.py,
+    an attached engine - keeps its own copy of what to launch, so the switch is done
+    by attribute presence rather than by type: a name the object does not have is left
+    alone.
+    """
+    if hasattr(engine, "config"):
+        engine.config = hypercore_worker_config(cfg, json.dumps(cfg))
+    if hasattr(engine, "env"):
+        engine.env = child_env(cfg)
+    if hasattr(engine, "exe"):
+        exe = engine_binary(cfg)
+        if exe:
+            engine.exe = exe
+    if hasattr(engine, "args"):
+        args = list(cfg.get("args") or [])
+        if getattr(engine, "args", []) and engine.args and engine.args[-1] == "--serve":
+            args.append("--serve")
+        engine.args = args
+
+
+def apply_model_version(svc: Service, entry: dict[str, Any]) -> tuple[bool, str]:
+    """Point the service at one of the stored engine builds and restart the engine.
+
+    The binaries are already in place (serve/quant_store.py:materialise put them at
+    engine/strata); this updates what the engine is told to run. A version switch that
+    fails leaves the app answering: the HTTP server is never touched, and the previous
+    engine stays where it was.
+    """
+    engine = getattr(svc, "engine", None)
+    if engine is None:
+        return False, "there is no engine to switch"
+    cfg: dict[str, Any] | None = None
+    if entry.get("config"):
+        try:
+            cfg = runconfig.load(entry["config"])
+        except (OSError, ValueError) as exc:
+            return False, f"the run config of {entry.get('key')} could not be read: {exc}"
+        with svc.config_lock:
+            svc.config_path = entry["config"]
+        svc.model = cfg.get("model_name") or svc.model
+        svc.sampling_defaults = sampling_defaults_from_config(cfg)
+        point_engine_at_config(engine, cfg)
+        # The retry thread holds the engine that failed to start; it must not bring
+        # back the version the user just replaced.
+        candidate = getattr(getattr(svc, "engine_retry", None), "candidate", None)
+        if candidate is not None:
+            point_engine_at_config(candidate, cfg)
+    if isinstance(engine, OfflineEngine):
+        # Nothing is running, so there is nothing to restart: the version is set, and
+        # the retry thread or the Load button is what brings it up.
+        return True, (f"{entry.get('label')} is set as the model version. "
+                      "Load it (the button in the Chat tab, or POST /v1/start) to run it.")
+    try:
+        unload = getattr(engine, "unload", None)
+        if callable(unload):
+            unload()
+        svc.engine_stopped = False
+        ok = svc.start_engine()
+    except Exception as exc:  # noqa: BLE001 - a version switch is reported, not raised
+        return False, f"the engine did not come back: {exc}"
+    return ok, (f"{entry.get('label')} is loading" if ok
+                else "that version did not start: see the engine log")
 
 
 def engine_url(cfg: dict, given: str | None) -> str | None:

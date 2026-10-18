@@ -32,10 +32,10 @@ BUILD_RELEVANT = re.compile(
 )
 HIDDEN = re.compile(r"(BUILD_TESTS|BUILD_CONVERSATION_TESTS|WERROR|GGML_DIR)")
 
-OPTION_RE = re.compile(r"^\s*option\(\s*([A-Z0-9_]+)\s+\"([^\"]*)\"\s+([A-Za-z0-9_(){}$]+)\s*\)", re.M)
-CACHE_RE = re.compile(r"^\s*set\(\s*([A-Z0-9_]+)\s+\"([^\"]*)\"\s+CACHE\s+(\w+)\s+\"([^\"]*)\"\s*\)", re.M)
-PROJECT_RE = re.compile(r"project\(\s*(\w+)\s+VERSION\s+([0-9.]+)", re.I)
-TARGET_RE = re.compile(r"add_executable\(\s*([A-Za-z0-9_-]+)", re.M)
+OPTION_RE = re.compile(r"^\s*option\(\s*([A-Z0-9_]+)\s+\"([^\"]*)\"\s+([A-Za-z0-9_(){}$]+)\s*\)", re.MULTILINE)
+CACHE_RE = re.compile(r"^\s*set\(\s*([A-Z0-9_]+)\s+\"([^\"]*)\"\s+CACHE\s+(\w+)\s+\"([^\"]*)\"\s*\)", re.MULTILINE)
+PROJECT_RE = re.compile(r"project\(\s*(\w+)\s+VERSION\s+([0-9.]+)", re.IGNORECASE)
+TARGET_RE = re.compile(r"add_executable\(\s*([A-Za-z0-9_-]+)", re.MULTILINE)
 
 
 def read(path: Path) -> str:
@@ -67,8 +67,138 @@ def cmake_options(root: Path) -> list[dict[str, Any]]:
     return sorted(out, key=lambda o: o["name"])
 
 
+def _items(value: Any) -> list[Any]:
+    """The elements of a table: a dict gives its keys, a sequence gives its items."""
+    if isinstance(value, dict):
+        return list(value.keys())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return list(value)
+    if value is None:
+        return []
+    return [value]
+
+
+def _literal(node: ast.AST, consts: dict[str, Any]) -> Any:
+    """Evaluate the shapes setup.py uses to build its choice tables.
+
+    Dict and list displays, comprehensions over them, starred unpacking, list() /
+    sorted() / set() / dict.fromkeys() and + concatenation. Anything else returns
+    None, and the caller reports the choices as unknown rather than guessing.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        out: list[Any] = []
+        for elt in node.elts:
+            if isinstance(elt, ast.Starred):
+                out.extend(_items(_literal(elt.value, consts)))
+            else:
+                out.append(_literal(elt, consts))
+        return out
+    if isinstance(node, ast.Dict):
+        out_dict: dict[Any, Any] = {}
+        for key, value in zip(node.keys, node.values):
+            if key is None:                       # {**other}
+                for k, v in (_literal(value, consts) or {}).items():
+                    out_dict[k] = v
+                continue
+            out_dict[_literal(key, consts)] = _literal(value, consts)
+        return out_dict
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+        rows: list[dict[str, Any]] = [{}]
+        for gen in node.generators:
+            if not isinstance(gen.target, ast.Name):
+                return None
+            items = _items(_literal(gen.iter, consts))[:MAX_CHOICE_EXPANSION]
+            rows = [{**row, gen.target.id: item}
+                    for row in rows for item in items][:MAX_CHOICE_EXPANSION]
+        if isinstance(node, ast.DictComp):
+            return {(_literal(node.key, dict(consts, **row))): _literal(node.value, dict(consts, **row))
+                    for row in rows}
+        return [_literal(node.elt, dict(consts, **row)) for row in rows]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _items(_literal(node.left, consts)) + _items(_literal(node.right, consts))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("list", "sorted", "set", "tuple", "frozenset"):
+        return _items(_literal(node.args[0], consts)) if node.args else []
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "fromkeys":
+        return _items(_literal(node.args[0], consts)) if node.args else []
+    if isinstance(node, ast.Name):
+        return consts.get(node.id)
+    return None
+
+
+def module_constants(tree: ast.Module) -> dict[str, Any]:
+    """Module-level names bound to literal tables: {name: value}.
+
+    setup.py builds --family and --model from FAMILIES, MODELS and PREVIEW_FAMILIES,
+    so the choice lists are only readable if those tables are collected first.
+    """
+    consts: dict[str, Any] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target.id]
+        else:
+            continue
+        for name in targets:
+            consts[name] = _literal(node.value, consts)
+    return consts
+
+
+def _choice_list(node: ast.AST | None, consts: dict[str, Any]) -> list[str] | None:
+    """The accepted values of a flag, or None when they cannot be read statically."""
+    if node is None:
+        return None
+    value = _literal(node, consts)
+    return [v for v in dict.fromkeys(_items(value)) if isinstance(v, str)] or None
+
+
+def _metavar_choices(metavar: Any) -> list[str] | None:
+    """metavar="on|off|GGUF" is how setup.py spells a choice list it cannot put in
+    choices= (the last value stands for a file path). The parts are returned as
+    written; the caller labels an uppercase part as "a file"."""
+    if not isinstance(metavar, str):
+        return None
+    parts = [p.strip() for p in metavar.split("|") if p.strip()]
+    return parts if len(parts) > 1 else None
+
+
+#: A choice table is small; this is only a guard against a comprehension over
+#: something that is not a table at all.
+MAX_CHOICE_EXPANSION = 200
+
+#: The setup.py groups the Build tab lists: what a person chooses before building.
+#: The rest (paths, ports, source mirrors) are counted and reported, not listed.
+SETUP_GROUPS = ("model", "context", "kv-cache", "images", "experimental")
+
+
+def setup_group(flag: str) -> str:
+    """What a setup.py flag is about, from its own name."""
+    name = flag.lstrip("-")
+    if name in ("family", "model"):
+        return "model"
+    if name.startswith(("image", "vision")):
+        return "images"
+    if name == "kv" or name.startswith("kv"):
+        return "kv-cache"
+    if "context" in name or "rope" in name:
+        return "context"
+    if "experimental" in name:
+        return "experimental"
+    if name in ("gpu", "gpus", "low-ram", "cuda"):
+        return "hardware"
+    return "other"
+
+
 def argparse_choices(root: Path) -> list[dict[str, Any]]:
-    """The setup.py flags, read with ast so we get the choices lists verbatim."""
+    """The setup.py flags, read with ast so the choices lists come verbatim.
+
+    Each entry carries the group it belongs to (model, context, kv-cache, images,
+    experimental, hardware, other) and whether the Build tab should show it: the
+    five groups a person chooses before building are shown, the housekeeping flags
+    (paths, ports, source mirrors) are counted and reported instead of listed.
+    """
     src = read(root / "setup.py")
     if not src:
         return []
@@ -76,6 +206,7 @@ def argparse_choices(root: Path) -> list[dict[str, Any]]:
         tree = ast.parse(src)
     except SyntaxError:
         return []
+    consts = module_constants(tree)
 
     out: list[dict[str, Any]] = []
     for node in ast.walk(tree):
@@ -88,20 +219,21 @@ def argparse_choices(root: Path) -> list[dict[str, Any]]:
         if not flags:
             continue
         kw = {k.arg: k.value for k in node.keywords if k.arg}
-        choices_node = kw.get("choices")
-        if isinstance(choices_node, ast.List):
-            choices = [c.value for c in choices_node.elts if isinstance(c, ast.Constant)]
-        elif isinstance(choices_node, (ast.Call, ast.Name)):
-            choices = None          # a computed set (FAMILIES, MODELS): the UI fills it at runtime
-        else:
-            choices = None
-        type_node = kw.get("type")
+        flag = flags[-1]
+        choices = _choice_list(kw.get("choices"), consts)
+        metavar = _literal(kw.get("metavar"), consts)
+        if choices is None:
+            choices = _metavar_choices(metavar)
+        group = setup_group(flag)
         out.append({
-            "flag": flags[-1],
+            "flag": flag,
+            "group": group,
             "choices": choices,
-            "type": getattr(type_node, "id", None) if isinstance(type_node, ast.Name) else None,
-            "default": kw.get("default") if isinstance(kw.get("default"), (str, int, float, bool)) else None,
-            "help": kw.get("help") if isinstance(kw.get("help"), str) else "",
+            "metavar": metavar if isinstance(metavar, str) else None,
+            "type": getattr(kw["type"], "id", None) if isinstance(kw.get("type"), ast.Name) else None,
+            "default": _literal(kw["default"], consts) if "default" in kw else None,
+            "help": _literal(kw["help"], consts) if isinstance(kw.get("help"), ast.Constant) else "",
+            "visible": group in SETUP_GROUPS,
         })
     return out
 

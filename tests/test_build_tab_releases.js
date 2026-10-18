@@ -37,6 +37,9 @@ check(SERVER.includes("build_api.build_status()"), "the route does not call buil
 check(API.includes("def build_status() -> dict[str, Any]:"), "serve/build_api.py has no build_status");
 check(API.includes('"latest": listing'), "build_status returns the listing, not one release");
 check(API.includes('"newest": newest'), "build_status does not name the newest release");
+check(APP.includes("renderBuildChoices(s.setup"), "loadBuild does not render the setup choices of the installed release");
+check(APP.includes("renderBuildStatus(s.job"), "loadBuild does not report the state of a build in progress");
+check(APP.includes("refreshBuildStatus()"), "loadBuild never asks the hook for the setup it may already be running");
 
 // ---- 2. run loadBuild against a stub DOM ---------------------------------------
 const loadBuildSrc = slice(APP, "function loadBuild() {", "\n}", "loadBuild");
@@ -47,18 +50,37 @@ function runLoadBuild(payload, fetchImpl) {
     "build-installed": { innerHTML: "" },
     "build-tag": { innerHTML: "" },
     "build-update-note": { innerHTML: "", textContent: "" },
+    // The setup-choices card is a separate card; loadBuild must not trip on it.
+    "build-choices": { hidden: true },
+    "build-choices-tag": { textContent: "" },
+    "build-choices-groups": { innerHTML: "" },
+    "build-choices-rest": { textContent: "" },
+    "build-choices-command": { textContent: "" },
+    "build-choices-note": { textContent: "" },
   };
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  const fn = new Function("$", "esc", "headers", "renderBuildOptions", "renderBuildLog", "fetch",
+  const calls = { choices: null, options: null, log: null, status: null };
+  const fn = new Function("$", "esc", "headers", "renderBuildOptions", "renderBuildChoices",
+    "renderBuildLog", "renderBuildStatus", "refreshBuildStatus", "fetch",
     loadBuildSrc + "\nreturn loadBuild;");
-  fn((id) => dom[id], esc, () => ({}), () => {}, () => {}, fetchImpl)();
+  fn((id) => dom[id], esc, () => ({}),
+     (options) => { calls.options = options; },
+     (setup, tag, error) => { calls.choices = { setup, tag, error }; },
+     (job) => { calls.log = job; },
+     (job, kind) => { calls.status = { job, kind }; },
+     () => {},
+     fetchImpl)();
+  lastChoices = calls;
   return dom;
 }
 
+let lastChoices = null;
 const respond = (payload) => () => Promise.resolve({ json: () => payload });
 
-function status(installed, listing, newest, update) {
-  return { installed, latest: listing, newest, update_available: update, options: null, job: { state: "idle" } };
+function status(installed, listing, newest, update, setup, job = { state: "idle" }) {
+  return { installed, latest: listing, newest, update_available: update,
+           options: null, setup: setup || { groups: {}, hidden: 0, total: 0 },
+           job };
 }
 
 const RELEASES = [
@@ -89,6 +111,8 @@ async function main() {
         "the update note does not name the newer release");
   check(dom["build-installed"].innerHTML.includes("Worker</dt><dd>built"),
         "the installed card does not report a built worker");
+  check(lastChoices && lastChoices.choices && lastChoices.choices.tag === "0.1.44",
+        "the setup-choices card is not filled for the installed release");
 
   // b) the installed engine is already the newest
   dom = runLoadBuild(
@@ -116,6 +140,16 @@ async function main() {
   check(dom["build-tag"].innerHTML.includes('value="main"'), "a failed request leaves the dropdown empty");
   check(dom["build-update-note"].textContent.includes("could not read the build status"),
         "a failed request is not reported");
+
+  // e) a build is already running: loadBuild feeds its state to the status card
+  const running = status({ version: "0.1.44", source: "local", worker: true },
+                         { repo: "x", releases: RELEASES }, RELEASES[0], false,
+                         { state: "idle" }, { state: "building", elapsed_s: 240, version: "0.1.44" });
+  runLoadBuild(running, respond(running));
+  await wait(50);
+  check(lastChoices && lastChoices.status && lastChoices.status.job.state === "building",
+        "a build in progress is not reported to the status card");
+  check(lastChoices.status.kind === "source", "the status card is not told which job it is showing");
 
   if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }
   console.log("all release-box checks passed");

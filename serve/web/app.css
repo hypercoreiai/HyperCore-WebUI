@@ -23,6 +23,17 @@ main { flex: 1; min-height: 0; display: flex; }
 .st-header .st-btn--danger[data-armed] { background: var(--st-danger); color: #fff; }
 .st-header .st-btn--danger[data-done] { background: var(--st-surface-2); color: var(--st-ink-muted); }
 
+/* Model version: the header select that starts one of the quant engine builds stored
+   under engine/versions/<quant>. A select rather than a button because the choices are
+   whatever this machine has actually built, and they change with every build. */
+.st-version { display: flex; align-items: center; gap: var(--st-s-2); height: 32px; }
+.st-version select { height: 32px; padding: 0 10px; border-radius: var(--st-r-pill);
+  background: var(--st-surface-2); color: var(--st-ink); border: 1px solid var(--st-line);
+  font-family: var(--st-font); font-size: var(--st-fs-sm); font-weight: var(--st-fw-medium); }
+.st-version select:focus-visible { outline: 2px solid var(--st-focus); outline-offset: 2px; }
+.st-version select:disabled { color: var(--st-ink-muted); background: var(--st-bg); }
+.st-version .st-icon { color: var(--st-ink-muted); }
+
 /* ---------------------------------------------------------------- chat */
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .chat { max-width: 860px; margin: 0 auto; padding: var(--st-s-8) var(--st-s-6) var(--st-s-6); display: flex;
@@ -104,8 +115,14 @@ main { flex: 1; min-height: 0; display: flex; }
 .chip .st-btn--icon .st-icon { width: 14px; height: 14px; }
 
 /* ---------------------------------------------------------------- monitor */
-.view--monitor, .view--about { overflow-y: auto; }
-.view--assist { overflow-y: auto; }
+/* Every tab but the chat is a column of cards that grows past the viewport. body is
+   overflow:hidden and main is a fixed-height flex row, so a tab without its own scroll is
+   clipped: the cards below the fold are unreachable. The chat tab scrolls through
+   .chat-scroll, so it is not included here. */
+.view--monitor, .view--about, .view--assist, .view--tune, .view--build { overflow-y: auto; }
+/* Scrollable tabs keep the same reading column and spacing as the monitor. */
+.view--tune, .view--build { padding: var(--st-s-6); gap: var(--st-s-5); }
+.view--tune > .st-card, .view--build > .st-card { max-width: 1240px; width: 100%; margin: 0 auto; }
 /* The picker folds like the thought box: .st-collapse supplies the border, the summary and the
    chevron; the body keeps the flex layout the select and the buttons had. */
 .assist-top { max-width: 860px; margin: 0 auto; }
@@ -272,8 +289,11 @@ body[data-surface="metal"] {
 .tune-grid label, .tune-pins label, .build-options label { display: flex; flex-direction: column; gap: 4px;
   font-size: var(--st-fs-md); color: var(--st-ink-muted); }
 .tune-grid input, .tune-grid select, .tune-pins input, .build-options input, .build-options select,
-.build-releases select { font: inherit; padding: 8px 10px; border: 1px solid var(--st-line);
+.build-releases select, .build-quant input { font: inherit; padding: 8px 10px; border: 1px solid var(--st-line);
   border-radius: var(--st-radius); background: var(--st-panel); color: var(--st-ink); }
+/* Which quant this build is for. Empty means the default engine in engine/. */
+.build-quant { display: flex; align-items: center; gap: var(--st-s-2); margin-top: var(--st-s-2); }
+.build-quant input { font-family: var(--st-font-mono); }
 .tune-pins { display: flex; flex-wrap: wrap; gap: var(--st-s-3); align-items: center; }
 .tune-pins label { flex-direction: row; align-items: center; gap: 6px; }
 .tune-priors { display: flex; flex-direction: column; gap: 4px; }
@@ -290,6 +310,31 @@ body[data-surface="metal"] {
 .tune-best { font-size: var(--st-fs-md); color: var(--st-ink); }
 .tune-export a { color: var(--st-accent); }
 .build-actions { display: flex; gap: var(--st-s-3); flex-wrap: wrap; }
+/* The status card under the setup boxes: one line for the stage the background job is
+   on, and the warnings and errors it has printed. */
+.build-status { border: 1px solid var(--st-line); border-radius: var(--st-r-md);
+  background: var(--st-panel); padding: var(--st-s-3) var(--st-s-4); margin: var(--st-s-3) 0; }
+.build-status__row { display: flex; gap: var(--st-s-3); align-items: baseline; flex-wrap: wrap; }
+.build-status__stage { font-size: var(--st-fs-md); font-weight: var(--st-fw-bold); color: var(--st-ink); }
+.build-status[data-state="failed"], .build-status[data-state="cancelled"] {
+  border-color: var(--st-danger); background: var(--st-danger-tint); }
+.build-status__problems { list-style: none; margin: var(--st-s-3) 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 6px; }
+.build-status__problems li { font: 400 12px var(--st-font-mono); padding: 6px 10px;
+  border-radius: var(--st-r-sm); }
+.build-status__problems li.error { background: var(--st-danger-tint); color: var(--st-danger-text); }
+.build-status__problems li.warning { background: var(--st-warn-tint); color: var(--st-warn-text); }
+.build-choices-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--st-s-4); margin-bottom: var(--st-s-3); }
+.build-choices-group__title { font-size: var(--st-fs-sm); letter-spacing: .07em; text-transform: uppercase;
+  color: var(--st-ink-muted); margin: 0 0 8px; font-weight: var(--st-fw-bold); }
+.build-choices label, .build-options label { display: flex; flex-direction: column; gap: 4px;
+  font-size: var(--st-fs-md); color: var(--st-ink-muted); }
+.build-choices label code { font: 400 11px var(--st-font-mono); color: var(--st-ink-soft); }
+.build-choices input, .build-choices select { font: inherit; padding: 8px 10px; border: 1px solid var(--st-line);
+  border-radius: var(--st-radius); background: var(--st-panel); color: var(--st-ink); }
+.build-command { font: 400 12px var(--st-font-mono); white-space: pre-wrap; background: var(--st-panel);
+  border: 1px solid var(--st-line); border-radius: var(--st-radius); padding: var(--st-s-3) var(--st-s-4); }
 .build-options-grid, #build-options-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--st-s-4); }
 .build-log pre { font: 400 12px var(--st-font-mono); white-space: pre-wrap; max-height: 420px; overflow: auto;

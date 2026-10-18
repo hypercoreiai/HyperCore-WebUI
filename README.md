@@ -135,6 +135,9 @@ installed, only to find a new release.
   manifest so a new release's new options appear here automatically.
 - **Build log** streams while the compile runs. `tmp/` holds one clone and is deleted when
   the build finishes.
+- **Build for quant**: naming a quant (q2_0, IQ2_S, Q4_K_M) stores that engine under
+  `engine/versions/<quant>/` instead of overwriting the engine in `engine/`, so a
+  second quant can be built without losing the first. See *Model versions* below.
 
 ![The Build tab: installed version, the release picker, the build options and the log](data/media/build_5.png)
 
@@ -270,11 +273,57 @@ The retry then holds off for as long as that sweep runs.
 4. The build dropdowns are extracted from the cloned release's own
    `CMakeLists.txt` and `setup.py` by `tools/extract_build_options.py`, and
    diffed against the previous manifest so the tab can show what changed.
+5. The **Setup choices** card under the release picker reads the selected release's own
+   `setup.py` (a raw file fetch, no clone) and lists the model, quant, context, KV cache,
+   image and experimental flags before anything is downloaded or built. `Run setup with
+   these` starts that setup in the background; while it runs the button reads **Kill
+   Build** and stops it, and the status card under the boxes reports the step `setup.py`
+   has reached (from its own `=== Step N: ... ===` markers), the percent of a download in
+   progress, and every `[X]`, `[!]` or traceback it printed. A from-source build reports
+   its own stage (cloning, configuring, compiling, transferring) in the same card, and
+   its button likewise becomes **Kill Build**.
 
 `tmp/` holds exactly one clone, is deleted when a build finishes, and is never
 read at runtime. Deleting it changes nothing. The build log is also written to
 `logs/build-<tag>.log`; the tab reads it with `GET /build/log?offset=<n>`, so each
 poll gets only the lines written since the last one.
+
+## Model versions: one engine build per quant
+
+The options an engine needs depend on the quant it will run: Q4_K/Q5_K/Q6_K want the
+MMQ prompt kernels (`STRATA_MMQ_KQUANTS`), an IQ2_S or IQ3_S expert model wants native
+IQ experts (`STRATA_NATIVE_EXPERTS`), a plain q2_0 pack wants neither. Building once for
+"whatever is on the box" means changing quant later means rebuilding.
+
+So a build is kept under the quant it was configured for:
+
+```text
+engine/
+  BUILD.json              the active build, as before
+  VERSIONS.json           {"active": "q2_0", "versions": {"q2_0": {...}}}
+  versions/q2_0/strata    the binaries for that quant
+  versions/q2_0/BUILD.json
+  strata                  the active binaries, materialised from versions/<active>
+```
+
+`engine/strata` is a symlink on Linux and a copy on Windows, which is why nothing else
+has to change: every run config still says `engine/strata`, and pointing it at the
+selected quant is what the **Model version** dropdown in the header does.
+
+- The dropdown lists every quant with a stored build, plus every `config/run-*.json`
+  that names a quant and uses the engine already in `engine/` (the template
+  `config/run-example.json` is not a model version and is not listed).
+- `GET /versions` returns that list and which one is active; `POST /versions/select
+  {"version": "q2_0"}` places that build's binaries, points the engine at its run
+  config, and restarts it. A switch that fails is reported, and the app keeps serving.
+- `serve/quant_store.py` is the store. `VERSIONS.json` is bookkeeping only: if it is
+  missing or corrupt it is rebuilt by scanning `engine/versions/` and `config/`, and the
+  active build is recognised by comparing the digest of `engine/strata` with what is
+  stored.
+
+Build one per quant from the Build tab (the *Build for quant* field next to the release
+picker), then start whichever you want from the header.
+
 
 ## Fetching the model from the page
 
@@ -284,7 +333,7 @@ detached subprocess and streams its log into the page:
 
 ```bash
 POST /config/strata-hook {"path": "/path/to/strata", "args": ["--yes", "--no-start"]}
-GET  /config/strata-hook?offset=1234      # state plus the log from that byte onward
+GET  /config/strata-hook?offset=1234      # state, the stage, the problems, and the log from that byte onward
 POST /config/strata-hook/stop
 ```
 

@@ -4,7 +4,7 @@ The Chat tab has two ways out of a conversation.  The download button writes the
 Markdown to the browser's own downloads folder; the archive button posts the same
 Markdown to POST /history/archive, which lands it beside the transcripts the
 history builder already reads (data/history/_old_chats/), so the next
-tools/build_history.py run picks the chat up.
+tools/build_history.py picks the chat up.
 
 Naming follows the files already in that folder: YYYY-MM-DD-HH-MM-<slug>.md.
 Nothing is ever overwritten - a second chat in the same minute gets -2, -3.

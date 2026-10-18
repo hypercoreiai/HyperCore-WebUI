@@ -1,5 +1,5 @@
 {
-  "source": "/home/ai-user0/HyperCore-WebUI/tmp/strata-main",
+  "source": "tmp/strata-main",
   "project": "strata",
   "version": "0.1.45",
   "cmake_options": [
@@ -161,56 +161,95 @@
   "setup_choices": [
     {
       "flag": "--family",
-      "choices": null,
+      "group": "model",
+      "choices": [
+        "qwen",
+        "swift",
+        "coder",
+        "unsloth",
+        "nvfp4",
+        "qwen36"
+      ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "qwen = Qwen3.8-Flash-Next, swift = Swift 1.5, qwen36 = Qwen3.6-35B-A3B (pictures with --vision, several requests at once with --parallel; docs/QWEN36.md)",
+      "visible": true
     },
     {
       "flag": "--model",
-      "choices": null,
+      "group": "model",
+      "choices": [
+        "Q2_0",
+        "IQ2_XS",
+        "IQ3_XXS",
+        "IQ3_S",
+        "IQ1_M",
+        "UD-IQ4_XS",
+        "UD-Q4_K_XL",
+        "UD-Q5_K_XL",
+        "UD-Q6_K_XL",
+        "Q8_0",
+        "NVFP4",
+        "NVFP4-NVIDIA"
+      ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": true
     },
     {
       "flag": "--context",
+      "group": "context",
       "choices": null,
+      "metavar": null,
       "type": "int",
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": true
     },
     {
       "flag": "--rope-scaling",
+      "group": "context",
       "choices": [
         "none",
         "linear",
         "yarn"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "the RoPE extension for a context past the model's trained 262144: linear (position interpolation) or yarn - llama.cpp's types. Omitted with a scaled context, the setup picks yarn; 'none' is refused for such a context",
+      "visible": true
     },
     {
       "flag": "--rope-scale",
+      "group": "context",
       "choices": null,
+      "metavar": null,
       "type": "float",
       "default": null,
-      "help": ""
+      "help": "the extension factor (default: the final context over the trained 262144, at least 1 - 1.5 for 384K, 2 for 512K, 1 inside the trained range)",
+      "visible": true
     },
     {
       "flag": "--kv",
+      "group": "kv-cache",
       "choices": [
         "int8",
         "q4_0",
         "k8v4"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "KV cache precision above 8K context: int8 (default), q4_0 (half the memory, a little less precise) or k8v4 (hybrid: INT8 K + 4-bit V, 816 B/cell)",
+      "visible": true
     },
     {
       "flag": "--vision",
+      "group": "images",
       "choices": [
         "yes",
         "no",
@@ -218,260 +257,372 @@
         "gpu",
         "cpu"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "let the model read images (yes = the encoder on the GPU)",
+      "visible": true
     },
     {
       "flag": "--vision-tokens",
+      "group": "images",
       "choices": null,
+      "metavar": "N",
       "type": "int",
       "default": null,
-      "help": ""
+      "help": "the most image tokens a picture becomes (default 1024 with the encoder on the GPU, 300 on the CPU): more reads small text and charts better, and takes longer to encode; remembered for this model",
+      "visible": true
     },
     {
       "flag": "--images",
+      "group": "images",
       "choices": [
         "qwen-image",
         "no"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": true
     },
     {
       "flag": "--image-quant",
+      "group": "images",
       "choices": [
         "Q4_K_M",
         "Q6_K",
         "Q8_0"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": true
     },
     {
       "flag": "--image-backend",
+      "group": "images",
       "choices": [
         "cuda",
         "hip",
         "vulkan",
         "cpu"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": true
     },
     {
       "flag": "--image-native",
+      "group": "images",
       "choices": [
         "on",
         "off"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": true
     },
     {
       "flag": "--image-gpu-policy",
+      "group": "images",
       "choices": [
         "auto",
         "keep",
         "shrink",
         "unload"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": true
     },
     {
       "flag": "--experimental-speed-projection",
-      "choices": null,
+      "group": "experimental",
+      "choices": [
+        "on",
+        "off",
+        "GGUF"
+      ],
+      "metavar": "on|off|GGUF",
       "type": null,
       "default": null,
-      "help": ""
+      "help": "EXPERIMENTAL, off by default: the control vector in data/experimental-speed-projection (or another GGUF) as a projection on layers 4-44; see docs/DETAILS.md",
+      "visible": true
     },
     {
       "flag": "--port",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": "int",
       "default": null,
-      "help": ""
+      "help": "the server's port (default: the one the install was set up with, 8080 for a new one)",
+      "visible": false
     },
     {
       "flag": "--gpu",
+      "group": "hardware",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "one GPU, numbered as nvidia-smi numbers them (AMD: as setup lists them) (default: asked when several can be used; with --setup it is saved, when starting it is for that start only)",
+      "visible": false
     },
     {
       "flag": "--gpus",
+      "group": "hardware",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "several GPUs sharing one model, as nvidia-smi numbers them (AMD: as setup lists them): \"0,2\", or \"all\" (every card that can); the first is the main one. Saved, also when starting (see docs/MULTI_GPU.md)",
+      "visible": false
     },
     {
       "flag": "--layer-split",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "with --gpus: where each later GPU's layers start (\"18\", \"16,32\"), one rising number per GPU after the first - not layers per card; default auto, placed from each GPU's free VRAM",
+      "visible": false
     },
     {
       "flag": "--no-remote-expert-opt",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "with two or more GPUs: leave out --remote-expert-opt, which setup adds there (#578)",
+      "visible": false
     },
     {
       "flag": "--host",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "where the server listens: 127.0.0.1 = this PC only (default), 0.0.0.0 = also other devices on your network (issue #26; set --api-key too)",
+      "visible": false
     },
     {
       "flag": "--api-key",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "require this key from clients (recommended with --host 0.0.0.0); several keys: key1,key2",
+      "visible": false
     },
     {
       "flag": "--no-browser",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "do not open the chat page in the browser when the model is ready (for a harness or an app that uses the API; remembered for this model, also in run-<model>.bat/.sh)",
+      "visible": false
     },
     {
       "flag": "--browser",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "open the chat page again when the model is ready (the default; undoes --no-browser)",
+      "visible": false
     },
     {
       "flag": "--data-dir",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "where the model files go (~70-120 GB): default Strata-data next to this folder, remembered for every Strata folder on this PC",
+      "visible": false
     },
     {
       "flag": "--models-dir",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "where the GGUF files go (default: <data folder>/models)",
+      "visible": false
     },
     {
       "flag": "--gguf-dir",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "use GGUF files you already have (a folder with every shard: <name>-00001-of-0000N.gguf ... -0000N-of-0000N.gguf)",
+      "visible": false
     },
     {
       "flag": "--yes",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "accept the recommended answers",
+      "visible": false
     },
     {
       "flag": "--setup",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "install another model or change settings",
+      "visible": false
     },
     {
       "flag": "--no-start",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "install only, do not start the model",
+      "visible": false
     },
     {
       "flag": "--update",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "update the installed engine, Python packages and model settings as a start would, without starting the model (UPDATE.bat / update.sh run it after a git pull)",
+      "visible": false
     },
     {
       "flag": "--rollback-engine",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "put back the engine an update replaced (kept in engine/.previous), and keep the current one there",
+      "visible": false
     },
     {
       "flag": "--build",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "compile the engine instead of using the ready-made one",
+      "visible": false
     },
     {
       "flag": "--source",
-      "choices": null,
+      "group": "other",
+      "choices": [
+        "auto",
+        "modelscope",
+        "huggingface"
+      ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "where the model files come from: auto (default: Hugging Face), huggingface or modelscope (mainland China: the same files, checked against ModelScope's published SHA-256; STRATA_SOURCE)",
+      "visible": false
     },
     {
       "flag": "--inspect",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "what a GGUF is and whether Strata runs it, from its headers only (no download): a file, a folder, a URL, ms:owner/repo (ModelScope) or hf:owner/repo, and optionally a variant name",
+      "visible": false
     },
     {
       "flag": "--cuda",
+      "group": "hardware",
       "choices": [
         "12",
         "13",
         "auto"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "NVIDIA: the CUDA toolkit of this model's engine. auto (default): CUDA 13, the ready-made engine; CUDA 12 (experimental) when a chosen card is older than CUDA 13 supports (Pascal, Volta). 12 also runs with an older driver (Windows 528+, Linux 525+). docs/OLDER_GPUS.md",
+      "visible": false
     },
     {
       "flag": "--prebuilt",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "where the ready-made engine is (a URL folder or a local folder)",
+      "visible": false
     },
     {
       "flag": "--check",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "only check this PC and exit",
+      "visible": false
     },
     {
       "flag": "--calibrate",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "tune the engine's settings for this PC (about 15-30 minutes, longer on a slow card), then start the model",
+      "visible": false
     },
     {
       "flag": "--draft-vocab",
-      "choices": null,
+      "group": "other",
+      "choices": [
+        "cjk",
+        "en",
+        "cyrillic",
+        "fr"
+      ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "the draft layer's tokens: cjk = with Chinese, Japanese and Korean (default), en = English and code only (~110 MiB less VRAM, English answers 1-2%% faster), cyrillic = English, code and the Cyrillic script (Ukrainian, Russian... answers decode ~30%% faster), fr = English, code and French (French answers: 18%% more drafts accepted)",
+      "visible": false
     },
     {
       "flag": "--low-ram",
+      "group": "hardware",
       "choices": [
         "auto",
         "on",
@@ -479,66 +630,89 @@
         "resident",
         "mmap"
       ],
+      "metavar": null,
       "type": null,
-      "default": null,
-      "help": ""
+      "default": "auto",
+      "help": "read the model's experts from one file in its folder instead of copying them all into RAM (for a PC with a big GPU and little RAM); auto: when the experts would not fit the RAM. In this mode the experts the GPU does not hold are copied into RAM once when they fit (resident), else read through the OS file cache (mmap); resident / mmap force one of the two",
+      "visible": false
     },
     {
       "flag": "--resident-budget-gib",
+      "group": "other",
       "choices": null,
+      "metavar": "N",
       "type": "float",
       "default": null,
-      "help": ""
+      "help": "UD-Q4_K_XL, UD-IQ4_XS: the GiB of its experts kept in RAM (default: the RAM less 24 GB, 40 on 64 GB; more is kept as you choose, with a note)",
+      "visible": false
     },
     {
       "flag": "--vram-reserve-mib",
+      "group": "other",
       "choices": null,
+      "metavar": "N",
       "type": "int",
       "default": null,
-      "help": ""
+      "help": "VRAM in MiB the engine leaves free for other programs (a game, another model; the engine's default: 700); the expert cache takes that much less",
+      "visible": false
     },
     {
       "flag": "--parallel",
+      "group": "other",
       "choices": null,
+      "metavar": "N",
       "type": "int",
       "default": null,
-      "help": ""
+      "help": "up to N requests decode together (batch slots, opt-in; default: one at a time, the others wait). Each slot takes VRAM from the expert cache; setup says what it recommends",
+      "visible": false
     },
     {
       "flag": "--replicas",
+      "group": "other",
       "choices": null,
+      "metavar": "N",
       "type": "int",
       "default": null,
-      "help": ""
+      "help": "several GPUs: run N independent engines, each on its own equal group of the chosen cards (2 replicas on 4 cards = two 2-card engines), requests spread over them (opt-in; more total throughput for a model that fits fewer cards; each replica holds its own copy of the model)",
+      "visible": false
     },
     {
       "flag": "--kv-streaming",
+      "group": "kv-cache",
       "choices": [
         "auto",
         "on",
         "off"
       ],
+      "metavar": null,
       "type": null,
-      "default": null,
-      "help": ""
+      "default": "auto",
+      "help": "from a 64K context: keep the KV cache in RAM and only the attention's window in VRAM (more experts fit on the GPU); auto: when the RAM has room for it",
+      "visible": true
     },
     {
       "flag": "--backend",
+      "group": "other",
       "choices": [
         "cuda",
         "hip",
         "sycl"
       ],
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "cuda = NVIDIA (default), hip = AMD RX 7900 / 7800 / 7700 XT, RX 9060 XT / 9070 / AI PRO R9700 on Linux or Windows (chosen by itself when the PC has no NVIDIA card Strata can use), sycl = Intel Arc, EXPERIMENTAL: Linux, built from source (docs/INTEL_ARC.md)",
+      "visible": false
     },
     {
       "flag": "--skip-build",
+      "group": "other",
       "choices": null,
+      "metavar": null,
       "type": null,
       "default": null,
-      "help": ""
+      "help": "",
+      "visible": false
     }
   ],
   "targets": [
@@ -722,14 +896,5 @@
     "verify_batch_parity",
     "verify_parity",
     "vmm_test"
-  ],
-  "changes": {
-    "from": "0.1.45",
-    "to": "0.1.45",
-    "added_options": [],
-    "removed_options": [],
-    "changed_defaults": [],
-    "added_flags": [],
-    "removed_flags": []
-  }
+  ]
 }
