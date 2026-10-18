@@ -197,6 +197,41 @@ Monitor see the same token stream as from a local engine. The server that starte
 the engine still owns it: `stop`, `unload` and VRAM resize are asks, not commands,
 and the About tab says which address the engine lives at.
 
+## When the GPU is busy elsewhere
+
+A tune sweep, a build, or another model server can hold the card, and the app should
+not go down with it. The HTTP server and the engine are separate lifecycles: if the
+engine cannot start, the server binds the port anyway, serves the page, and reports
+the engine as offline.
+
+```bash
+./run.sh --ui-only                      # the app, with no engine at all
+./run.sh --engine-retry-s 60          # how often an engine that failed is retried
+HYPERCORE_HOLD_THE_CARD="the 200-trial sweep" ./run.sh   # tell the retry to wait
+```
+
+What still works with no engine: the page itself, the Monitor, the Tune and Build
+tabs, the MCP switches, the Assist chat, the About tab, the chat archive and the
+history rebuild. What does not: a chat request. It is answered `503 engine_unavailable`
+with the reason and a `Retry-After`, and the Chat tab shows a banner saying so with a
+Load button.
+
+The engine is retried in a background thread every `engine_retry_s` seconds (default
+30, `"engine_retry_s"` in the run config, `--engine-retry-s` on the command line, 0
+to turn it off). Pressing Load tries once, immediately. When the card is free the
+engine is adopted in place and the banner disappears; no restart of the WebUI is
+needed.
+
+While a sweep or a build of this project has the card, the retry makes no attempt and
+`GET /health` reports `engine.retry.state: "paused"` with the reason in `paused_reason`.
+That is deliberate: an attempt would fail, and the process it spawns disturbs the
+numbers the sweep is measuring. The banner says so and the Load button reads "Try
+anyway" for anyone who wants to force it.
+
+A sweep started from the CLI (`optuna_tune/max_tune.sh`) is a separate process and the
+web server cannot see it, so name it: `HYPERCORE_HOLD_THE_CARD="the 200-trial sweep"`.
+The retry then holds off for as long as that sweep runs.
+
 ## How the Build tab works
 
 1. Reads the installed version from `engine/BUILD.json`, or from the

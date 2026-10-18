@@ -289,16 +289,66 @@ $("api-key").onchange = () => { store.set("apikey", $("api-key").value.trim()); 
   loadMcp(); loadPrompts(true); loadAssistMonitor(); };
 
 let health = {model: "hypercore", images: false, max_context: 0};
+
+// The engine is not the app. When it cannot start - a sweep, a build or another server
+// holds the GPU - every tab still works and the chat says so plainly instead of failing.
+function renderEngineState() {
+  const state = health.engine || {};
+  const offline = state.state === "offline";
+  $("engine-offline").hidden = !offline;
+  if (!offline) return;
+  const retry = state.retry || {};
+  const why = state.reason || state.detail || "no engine is running";
+  // A retry is paused while a tune sweep or a build has the GPU: saying "retrying in 30 s"
+  // then would be a lie, and the attempt would disturb the work holding the card.
+  const next = retry.paused
+    ? ` ${retry.paused_reason || "Nothing is retried while another job has the GPU."}`
+    : retry.state === "retrying"
+      ? ` Retrying in ${Math.max(1, Math.round(retry.next_attempt_s || 0))} s (attempt ${retry.attempts || 0}).`
+      : "";
+  $("engine-offline-title").textContent = "The model is not running";
+  $("engine-offline-why").textContent = `${why}${next}`;
+  // the engine's own error, in full, for anyone who wants to see why
+  $("engine-offline-why").title = state.detail || retry.detail || why;
+  $("engine-load-btn").textContent = retry.paused ? "Try anyway"
+                                : retry.state === "retrying" ? "Try now" : "Load it";
+  $("chat-empty-sub").textContent = "The model is not loaded on this PC. The tabs below still work.";
+}
+
 async function loadHealth() {
   try {
     health = await (await fetch("health")).json();
-    $("attach-btn").title = health.images ? "Attach a text file or a picture (or drop it here)"
-                                          : "Attach a text file (or drop it here)";
-    $("chat-empty-sub").textContent = `${health.model} runs on this PC. Nothing leaves it.`;
+    if (health.images) { $("attach-btn").title = "Attach a text file or a picture (or drop it here)"; }
+    else { $("attach-btn").title = "Attach a text file (or drop it here)"; }
+    if (!health.engine || health.engine.state !== "offline") {
+      $("chat-empty-sub").textContent = `${health.model} runs on this PC. Nothing leaves it.`;
+    }
+    renderEngineState();
   } catch (e) {
     setTimeout(loadHealth, 2000);
   }
 }
+
+$("engine-load-btn").onclick = async () => {
+  const btn = $("engine-load-btn");
+  btn.disabled = true;
+  btn.textContent = "Loading...";
+  try {
+    const res = await fetch("v1/load", {method: "POST", headers: headers(true), body: "{}"});
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error((out.error && out.error.message) || `the server said ${res.status}`);
+    }
+    toast("success", "The engine is loading", "A model load takes a minute or two; the chat " +
+          "will work when it is ready.", 8000);
+  } catch (e) {
+    toast("error", "The engine could not be loaded", e.message || String(e), 8000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Try again";
+    loadHealth();
+  }
+};
 
 // ------------------------------------------------------------------ Monitor
 const METRICS = [

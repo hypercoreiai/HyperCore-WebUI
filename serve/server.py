@@ -63,6 +63,7 @@ from serve import (
 from serve import prompts as agent_prompts
 from serve import responses as responses_api
 from serve import build_api, chat_archive, tune_api
+from serve.offline_engine import DEFAULT_RETRY_S, EngineRetry, EngineUnavailable, OfflineEngine
 from serve.frontend import (
     ChatTemplate,
     Event,
@@ -1625,6 +1626,7 @@ class Service:
         self.started_at = time.time()
         self.status_lock = threading.Lock()
         self.engine_stopped = False                   # POST /v1/stop set it: the engine is down until /v1/start
+        self.engine_retry = None                      # serve.offline_engine.EngineRetry while no engine is running
         self.mcp = None                                  # serve/mcp/'s McpHub when MCP servers are configured
         # GET /prompts: the agent profiles the web app's dropdown is built from. prompt.json beside the
         # server, or the one in the prompts/ folder beside it, is re-read when it changes, so a new profile
@@ -1818,6 +1820,13 @@ class Service:
         stopped this refuses rather than loading it behind the button."""
         if self.engine_stopped:
             raise EngineStopped("the engine is stopped: start it again (POST /v1/start) before sending a request")
+        if isinstance(self.engine, OfflineEngine) and self.engine_retry:
+            # No engine is running and the UI asked for one: try once, now, rather than wait
+            # for the next scheduled attempt.
+            state = self.engine_retry.try_now()
+            if self.loaded():
+                return
+            raise EngineUnavailable(state["reason"], state["interval_s"])
         if self.loaded() and not self._vision_down():
             return
         hook_failed = None
@@ -3861,9 +3870,14 @@ def make_handler(svc: Service):
                 self.end_headers()
                 self.wfile.write(body)
             elif path in ("/health", "/api/health"):
+                engine_state = (svc.engine.status() if isinstance(svc.engine, OfflineEngine)
+                                else {"state": "running"})
+                if svc.engine_retry:
+                    engine_state["retry"] = svc.engine_retry.status()
                 self._json(200, {"status": "ok", "max_context": svc.engine.max_context, "model": svc.model,
                                  "images": svc.vision is not None, "api_key": bool(svc.api_key),
-                                 "loaded": svc.loaded(), "service": "hypercore"})
+                                 "loaded": svc.loaded(), "service": "hypercore",
+                                 "engine": engine_state})
             elif path == "/status":
                 if not self._authorized():                  # #212: it shows the end of the last answer
                     return
@@ -4284,6 +4298,10 @@ def make_handler(svc: Service):
             except (GpuBusy, EngineStarting, SlotRefused) as e:
                 self._json(503, {"error": {"type": "server_error", "message": str(e)}},
                           headers={"Retry-After": int(e.retry_after)} if getattr(e, "retry_after", None) else None)
+            except EngineUnavailable as e:                 # the app is up; the model is not
+                self._json(503, {"error": {"type": "engine_unavailable", "message": str(e)}},
+                          headers={"Retry-After": int(e.retry_after)})
+                return
             except EngineDied as e:                          # before the answer started (not streamed)
                 self._json(503, {"error": {"type": "server_error", "message": f"{e}; the next request restarts it"}})
             except EngineStuck as e:                         # an unload or restart that could not end the engine
@@ -5388,6 +5406,13 @@ def main() -> int:
                                          "\"mcp_servers\" in the config, and the mcp.yaml beside this server or "
                                          "config/mcp.yaml)")
     ap.add_argument("--lazy", action="store_true", help="start the text-only API unloaded; load on first request")
+    ap.add_argument("--ui-only", action="store_true",
+                    help="serve the app without starting an engine: the page, the Monitor, the Tune and Build tabs "
+                         "stay usable while the GPU is held by a sweep, a build or another server. A request that "
+                         "needs the model is answered 503 with a Retry-After.")
+    ap.add_argument("--engine-retry-s", type=float, default=None,
+                    help="seconds between attempts to bring an engine back when it could not start "
+                         "(default 30; \"engine_retry_s\" in the config; 0 turns the retry off)")
     ap.add_argument("--api-monitor", action="store_true",
                     help="the API request monitor at /api-monitor: keeps the last 100 requests' prompts and answers in "
                          "memory (also \"api_monitor\": true in the config; off by default)")
@@ -5457,7 +5482,20 @@ def main() -> int:
                   "instead of starting a second copy. Use --no-attach to start this project's own.",
                   flush=True)
             attach_url = found
-    if attach_url:
+    engine, engine_candidate, engine_unavailable = None, None, None
+    if a.ui_only:
+        # The GPU is somewhere else: a sweep, a build, another server. The app still runs;
+        # every route that does not need weights answers, and a chat is refused with a reason.
+        vision = None
+        sampling_defaults = sampling_defaults_from_config(cfg)
+        effort_end = None
+        engine = OfflineEngine("started with --ui-only: no engine was asked for",
+                              model=cfg.get("model_name") or "no model loaded")
+        engine_unavailable = engine.reason
+        print("[hypercore] the web app is up without an engine: the Chat, Monitor, Tune, "
+              "Build and About tabs work. A chat request is answered 503 until an engine is "
+              "loaded (POST /v1/load, or the Load button in the Chat tab).", flush=True)
+    elif attach_url:
         # One engine per machine: the WebUI runs against the engine another server
         # already loaded, over the OpenAI API that engine's server speaks.
         from serve.attached_engine import AttachedEngine
@@ -5469,9 +5507,15 @@ def main() -> int:
         try:
             engine.start()
         except Exception as exc:  # noqa: BLE001 - the engine may not be up yet
-            raise SystemExit(f"[attach] {exc}") from None
-        print(f"attached: {engine.model}, context {engine.max_context} tokens "
-              f"(this server does not own that engine: stop it from its own page)", flush=True)
+            engine_candidate, engine, engine_unavailable = engine, OfflineEngine(
+                f"the engine at {attach_url} is not answering: {exc}",
+                model=cfg.get("model_name") or "no model loaded"), str(exc)
+            print(f"[hypercore] cannot attach to {attach_url}: {exc}", flush=True)
+            print(f"[hypercore] the web app is up anyway; it will try that engine again in the "
+                  f"background every {engine.retry_after_s:g} s.", flush=True)
+        else:
+            print(f"attached: {engine.model}, context {engine.max_context} tokens "
+                  f"(this server does not own that engine: stop it from its own page)", flush=True)
         effort_end = None
     elif a.engine == "strata":
         exe = engine_binary(cfg)
@@ -5488,7 +5532,12 @@ def main() -> int:
         try:
             engine.start()
         except Exception as exc:  # noqa: BLE001 - the engine may not be installed yet
-            raise SystemExit(f"[strata] {exc}") from None
+            engine_candidate, engine, engine_unavailable = engine, OfflineEngine(
+                str(exc), model=cfg.get("model_name") or "no model loaded"), str(exc)
+            print(f"[strata] {exc}", flush=True)
+            print(f"[hypercore] the web app is up anyway: the GPU is free for a sweep or a "
+                  f"build, and the engine is retried in the background every "
+                  f"{engine.retry_after_s:g} s.", flush=True)
         effort_end = None
     elif a.engine == "hypercore":
         if not cfg:
@@ -5556,13 +5605,20 @@ def main() -> int:
         )
         engine = HyperCoreRequestHandler(supervisor)
         if not lazy and not engine.restart():
-            raise SystemExit("[hypercore] the worker did not complete the READY handshake")
-        warn_tight_ram(engine.info.get("arena_mib"))
-        note = desktop_vram_note(cfg.get("backend"), engine.info.get("vram_free_mib"), engine_args(cfg),
-                                 linux_desktop())
-        if note:                                        # #560 #516: before --open starts a browser on that card
-            print(note, flush=True)
-        print(expert_config_line(engine.info), flush=True)
+            engine_candidate, engine, engine_unavailable = engine, OfflineEngine(
+                "the worker did not complete the READY handshake (the GPU is busy, or the "
+                "model paths in the run config are wrong)",
+                model=cfg.get("model_name") or "no model loaded"), "the worker did not come up"
+            print("[hypercore] the worker did not complete the READY handshake.", flush=True)
+            print(f"[hypercore] the web app is up anyway; the worker is retried in the "
+                  f"background every {engine.retry_after_s:g} s.", flush=True)
+        else:
+            warn_tight_ram(engine.info.get("arena_mib"))
+            note = desktop_vram_note(cfg.get("backend"), engine.info.get("vram_free_mib"),
+                                     engine_args(cfg), linux_desktop())
+            if note:                                    # #560 #516: before --open starts a browser on that card
+                print(note, flush=True)
+            print(expert_config_line(engine.info), flush=True)
     else:
         effort_end = None
         engine, vision, sampling_defaults = MockEngine(tok, a.script or [
@@ -5574,6 +5630,44 @@ def main() -> int:
                   sampling_defaults=sampling_defaults,
                   fit_max_tokens=a.fit_max_tokens or cfg.get("fit_max_tokens") is True,
                   trim_context=a.trim_context or cfg.get("trim_context") is True)
+    if engine_unavailable:
+        interval = a.engine_retry_s if a.engine_retry_s is not None else cfg.get("engine_retry_s", DEFAULT_RETRY_S)
+        try:
+            interval = float(interval)
+        except (TypeError, ValueError):
+            raise SystemExit(f'[hypercore] config "engine_retry_s" must be a number of seconds, not {interval!r}')
+        if interval > 0 and engine_candidate is not None:
+            def adopt(eng: object) -> None:
+                svc.engine = eng
+                print(f"[hypercore] the engine is back: context "
+                      f"{getattr(eng, 'max_context', 0)} tokens", flush=True)
+
+            def card_is_busy() -> str | None:
+                """A sweep or a build has the card. Retrying an engine then fails, and the
+                attempt itself disturbs what the sweep is measuring, so the retry holds off
+                until that work is done.
+
+                A sweep started from the CLI is invisible to this process, so an operator can
+                say so directly: HYPERCORE_HOLD_THE_CARD="the 200-trial sweep on the 4090".
+                """
+                held = os.environ.get("HYPERCORE_HOLD_THE_CARD", "").strip()
+                if held:
+                    return held
+                if tune_api.JOB.state == "running":
+                    return "a tune sweep is using the GPU; the engine is retried when it finishes"
+                build_state = getattr(build_api.JOB, "state", "idle")
+                if build_state not in ("idle", "done", "failed", "cancelled"):
+                    return f"a build is using the GPU ({build_state}); the engine is retried when it finishes"
+                return None
+
+            svc.engine_retry = EngineRetry(engine_candidate, adopt, engine_unavailable,
+                                         interval_s=interval, busy=card_is_busy).start()
+            print(f"[hypercore] the engine is retried in the background every {interval:g} s; "
+                  "the web app keeps serving in the meantime, and the retry waits for a "
+                  "tune sweep or a build to finish.", flush=True)
+        else:
+            print("[hypercore] no engine to retry: load one from the Chat tab, or start this "
+                  "server again with a run config.", flush=True)
     try:
         svc.set_aliases(cfg.get("aliases"))             # #297: other names the model answers to
     except ValueError as e:
@@ -5689,7 +5783,8 @@ def main() -> int:
     svc.start_idle_unload()
     here = "127.0.0.1" if a.host in ("0.0.0.0", "", "::") else a.host
     print(f"ready: http://{here}:{a.port}/v1  (OpenAI: /v1/chat/completions, Anthropic: /v1/messages, "
-          f"context {engine.max_context} tokens{', images on' if vision else ''}"
+          f"{f'context {engine.max_context} tokens' if not isinstance(engine, OfflineEngine) else 'no engine loaded'}"
+          f"{', images on' if vision else ''}"
           f"{', API key required' if svc.api_key else ''})", flush=True)
     print(f"       open http://{here}:{a.port}/ in a browser to chat; close this window to stop the model", flush=True)
     if a.host not in ("127.0.0.1", "localhost", "::1"):

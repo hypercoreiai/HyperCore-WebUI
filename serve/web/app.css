@@ -31,6 +31,18 @@ main { flex: 1; min-height: 0; display: flex; }
 .chat-empty__title { font-weight: var(--st-fw-black); font-size: var(--st-fs-display); line-height: var(--st-lh-tight);
                      letter-spacing: -.02em; }
 .chat-empty__sub { margin-top: var(--st-s-3); color: var(--st-ink-muted); }
+
+/* The engine is not running (a sweep, a build or another server holds the GPU). The app
+   is still usable: this says what is unavailable and how to get it back, without hiding
+   the chat or the composer. */
+.engine-offline { max-width: 860px; margin: var(--st-s-4) auto 0; padding: var(--st-s-3) var(--st-s-4);
+                  display: flex; align-items: center; gap: var(--st-s-3);
+                  background: var(--st-danger-tint); color: var(--st-danger-text);
+                  border: 1.5px solid var(--st-danger); border-radius: var(--st-r-md); }
+.engine-offline__body { flex: 1; min-width: 0; }
+.engine-offline__title { font-weight: var(--st-fw-bold); font-size: var(--st-fs-md); }
+.engine-offline__why { margin-top: 2px; color: var(--st-ink-muted); font-size: var(--st-fs-sm); }
+.engine-offline .st-btn { flex: none; }
 .st-msg { width: 100%; }
 .st-msg--assistant { align-self: flex-start; }
 .st-msg--assistant .st-bubble { width: 100%; }

@@ -46,6 +46,14 @@
 <main>
   <!-- ============================ Chat ============================ -->
   <section class="view view--chat" id="view-chat" role="tabpanel" aria-labelledby="tab-btn-chat">
+    <div class="engine-offline" id="engine-offline" hidden role="status">
+      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-warning"/></svg>
+      <div class="engine-offline__body">
+        <div class="engine-offline__title" id="engine-offline-title">The model is not running</div>
+        <div class="engine-offline__why" id="engine-offline-why"></div>
+      </div>
+      <button type="button" class="st-btn st-btn--secondary" id="engine-load-btn">Load it</button>
+    </div>
     <div class="chat-scroll" id="chat-scroll">
       <div class="chat" id="chat">
         <div class="chat-empty" id="chat-empty">

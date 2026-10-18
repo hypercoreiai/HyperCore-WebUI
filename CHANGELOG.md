@@ -39,7 +39,18 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   writes the Markdown to the browser's downloads folder as before; the archive
   button posts the same transcript to `POST /history/archive`, which writes it into
   `data/history/_old_chats/` beside the transcripts the history builder reads
-  (`serve/chat_archive.py`, `HYPERCORE_OLD_CHATS` to point it elsewhere). Archiving
+  (`serve/chat_archive.py`, `HYPERCORE_OLD_CHATS` to point it elsewhere).
+- **The app survives an engine that will not start.** A GPU held by a sweep, a build
+  or another server no longer takes the web app down with it: the server binds the
+  port, serves the page, and reports the engine as offline. Chat is answered
+  `503 engine_unavailable` with the reason and a `Retry-After`; a banner in the Chat
+  tab says what is unavailable and offers Load. `--ui-only` runs the app with no
+  engine at all, and `--engine-retry-s` (default 30, `"engine_retry_s"` in the run
+  config) controls how often a failed engine is retried in the background until it
+  comes back without restarting the WebUI (`serve/offline_engine.py`). While a tune
+  sweep or a build has the card the retry holds off and says so: the retry status
+  reports `paused` with the reason, and the banner offers "Try anyway" rather than
+  promising a retry that would fail and disturb the measurement being taken. Archiving
   then starts `tools/build_history.py` in a daemon thread, so the transcript is
   distilled into `chats/`, `topics/` and `notes/` without the button waiting for it;
   a second archive while a rebuild is running does not start another. `GET
