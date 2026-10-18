@@ -17,6 +17,16 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# The Build tab copies these binaries into engine/engine_<quant>/ and then deletes the
+# build tree, so the loader has to find libhypercore_api.so next to the binary it was
+# copied with. cmake's default RUNPATH is the build tree, which is gone by the time
+# the engine runs, and a plain file copy has no install step to rewrite it - the worker
+# dies at startup with "error while loading shared libraries: libhypercore_api.so".
+# $ORIGIN is the directory of the binary itself, and BUILD_WITH_INSTALL_RPATH puts that
+# rpath on the binary at link time so a copied engine is self-contained without patchelf.
+set(CMAKE_INSTALL_RPATH "$ORIGIN")
+set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+
 add_library(hypercore_api SHARED
   interface/strata_bridge.cpp
   interface/engine_process.cpp

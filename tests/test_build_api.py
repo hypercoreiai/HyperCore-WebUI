@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -764,6 +765,47 @@ class InterfaceWiringTests(unittest.TestCase):
 
     def test_a_missing_cmake_file_is_reported_not_raised(self) -> None:
         self.assertFalse(build_api.wire_in_interface(self.tmp / "no-such-clone"))
+
+
+class SelfContainedEngineTests(unittest.TestCase):
+    """An installed engine has to find its own library once the build tree is gone.
+
+    The tab copies hypercore-worker and libhypercore_api.so into engine/engine_<quant>/
+    and then deletes tmp/, so the loader resolves the library through the RUNPATH stored
+    in the binary. cmake's default is the build tree, which no longer exists at run time,
+    and a file copy has no install step to rewrite it. The interface's CMakeLists has to
+    ask for $ORIGIN - the directory the binary was copied into.
+    """
+
+    CMAKE_FILE: ClassVar[Path] = ROOT / "engine-src" / "CMakeLists.txt"
+
+    def test_the_interface_builds_with_the_origin_rpath(self) -> None:
+        text = self.CMAKE_FILE.read_text(encoding="utf-8")
+        self.assertIn('set(CMAKE_INSTALL_RPATH "$ORIGIN")', text)
+        self.assertIn("set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)", text)
+
+    def test_a_copied_engine_resolves_the_library_next_to_it(self) -> None:
+        cmake = shutil.which("cmake")
+        if cmake is None:
+            self.skipTest("cmake is not installed")
+        tmp = Path(tempfile.mkdtemp())
+        build, engine = tmp / "build", tmp / "engine_engine_q2_0"
+        engine.mkdir()
+        try:
+            subprocess.run([cmake, "-S", str(ROOT / "engine-src"), "-B", str(build)],
+                           check=True, capture_output=True)
+            subprocess.run([cmake, "--build", str(build), "--parallel", "2"],
+                           check=True, capture_output=True)
+            for name in (quant_store.WORKER, "libhypercore_api.so"):
+                shutil.copy2(build / name, engine / name)
+            shutil.rmtree(build)  # the tab cleans tmp/ after a build
+            out = subprocess.run(["ldd", str(engine / quant_store.WORKER)],
+                                 capture_output=True, text=True, check=False)
+            self.assertIn(str(engine / "libhypercore_api.so"), out.stdout,
+                          "the installed worker must load the library copied with it")
+            self.assertNotIn("not found", out.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
