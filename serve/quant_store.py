@@ -521,6 +521,81 @@ def _exists(path: str) -> bool:
     return target.is_file() or target.is_dir()
 
 
+#: The model data area. setup.py writes its packs and models into a folder named
+#: `Strata-data` next to the checkout, so a setup run from a test clone writes into the
+#: install it was cloned from. The project's own area is the one to read from:
+#: <root>/Strata-data, otherwise the same folder beside the project - the layout a test
+#: instance uses, where the model files are symlinked in instead of copied.
+DATA_NAMES = ("Strata-data", "strata-data")
+
+
+def data_areas() -> list[Path]:
+    """Every model data area on this box, the project's own first."""
+    out: list[Path] = []
+    for base in (ROOT, ROOT.parent):
+        for name in DATA_NAMES:
+            area = base / name
+            if area.is_dir():
+                out.append(area)
+    return out
+
+
+def data_root() -> Path | None:
+    """The model data area to read from, or None when the project has none."""
+    areas = data_areas()
+    return areas[0] if areas else None
+
+
+def _data_area(path: Path) -> Path | None:
+    """The Strata-data a path belongs to. That is what makes a path re-pointable."""
+    try:
+        for parent in Path(path).resolve().parents:
+            if parent.name in DATA_NAMES:
+                return parent
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def repoint_data(cfg: dict[str, Any]) -> list[str]:
+    """Point a run config's model paths at this project's data area.
+
+    A config copied from another install names that install's paths. Only a path that is
+    inside a different Strata-data AND has the same file under this project's area is
+    changed: a model the user installed somewhere else stays where it is, and nothing is
+    copied or downloaded. Returns what changed.
+    """
+    area = data_root()
+    if area is None:
+        return []
+    changes: list[str] = []
+
+    def fix(value: str) -> str:
+        head, sep, tail = value.partition(":")     # "model.gguf:1.0" is a path plus a weight
+        target = Path(head)
+        if not target.is_absolute():
+            target = ROOT / target
+        source = _data_area(target)
+        if source is None or source == area:
+            return value
+        try:
+            new = area / target.relative_to(source)
+        except ValueError:
+            return value
+        if not new.exists():
+            return value
+        out = str(new) + (":" + tail if sep else "")
+        if out != value:
+            changes.append(f"{value} -> {out}")
+        return out
+
+    if isinstance(cfg.get("tokenizer"), str):
+        cfg["tokenizer"] = fix(cfg["tokenizer"])
+    if isinstance(cfg.get("args"), list):
+        cfg["args"] = [fix(a) if isinstance(a, str) else a for a in cfg["args"]]
+    return changes
+
+
 def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | None = None) -> list[str]:
     """Make a run config point at the engine build the Build tab stored for its quant.
 
@@ -557,6 +632,10 @@ def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | Non
         moved = carry_runtime_data(key, cfg, source_root)
         if moved:
             changes.append(f"{len(moved)} runtime file path(s) moved into engine/{built.name}/data")
+
+    repointed = repoint_data(cfg)
+    if repointed:
+        changes.append(f"{len(repointed)} model path(s) re-pointed at this project's data area")
     return changes
 
 
@@ -604,6 +683,86 @@ def _label_from_config(key: str, cfg: dict[str, Any]) -> None:
     if key in data["versions"]:
         data["versions"][key]["label"] = name
         _write_index(data)
+
+
+def _ci_join(base: Path, segments: list[str]) -> Path | None:
+    """Walk `segments` under base, matching names case-insensitively.
+
+    The data area names its model folders in the case the model uses (models/Q2_0, while
+    the store key is lowercase), so a path cannot be built by joining strings.
+    """
+    current = base
+    for segment in segments:
+        if not current.is_dir():
+            return None
+        if (current / segment).exists():
+            current = current / segment
+            continue
+        match = next((p for p in current.iterdir() if p.name.lower() == segment.lower()), None)
+        if match is None:
+            return None
+        current = match
+    return current
+
+
+def fill_from_data(cfg: dict[str, Any], key: str) -> list[str]:
+    """Fill the model paths of a run config from this project's data area.
+
+    A config copied from the template names placeholders, and a config copied from another
+    install names paths that are not on this box. Both are shapes, not models: if the
+    project's data area has the same thing for this quant - the pack, the model shards,
+    the tokeniser, the mtp draft - that is the correct path, and the config is written with
+    it. A path that exists is never overwritten, and nothing is copied or downloaded.
+    Returns what changed.
+    """
+    area = data_root()
+    if area is None:
+        return []
+    changes: list[str] = []
+    markers = ("packs", "models", "mtp")
+
+    def resolve(value: str) -> str:
+        head, sep, tail = value.partition(":")      # "model.gguf:1.0" is a path plus a weight
+        target = Path(head)
+        if not target.is_absolute():
+            target = ROOT / target
+        if _exists(value):
+            return value
+        parts = [p.lower() for p in target.parts]
+        marker = next((m for m in markers if m in parts), None)
+        if marker is None:
+            return value
+        rest = list(target.parts[parts.index(marker) + 1:])
+        # this quant's own folder in the area first, then the shape the config named
+        found = _ci_join(area, [marker, key] + rest) or _ci_join(area, [marker] + rest)
+        if found is None or not found.exists():
+            return value
+        out = str(found) + (":" + tail if sep else "")
+        changes.append(f"{value} -> {out}")
+        return out
+
+    if isinstance(cfg.get("tokenizer"), str):
+        cfg["tokenizer"] = resolve(cfg["tokenizer"])
+    if isinstance(cfg.get("args"), list):
+        cfg["args"] = [resolve(a) if isinstance(a, str) else a for a in cfg["args"]]
+    return changes
+
+
+def repair_model_paths(cfg: dict[str, Any], key: str) -> list[str]:
+    """Point a new run config's model paths at this project's data area.
+
+    A config copied from another install names that install's paths, and a config written
+    from the template names placeholders: both are shapes rather than the files on this
+    box. Returns what changed, in the words the Build tab reports.
+    """
+    moved = repoint_data(cfg)
+    filled = fill_from_data(cfg, key)
+    out: list[str] = []
+    if moved:
+        out.append(f"data area {moved[0][0]} -> {moved[0][1]}")
+    if filled:
+        out.append(f"filled from the data area: {', '.join(filled)}")
+    return out
 
 
 def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path | None, str]:
@@ -665,6 +824,7 @@ def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path
     if isinstance(args, list):
         cfg["args"] = [_swap_quant(a, key) if isinstance(a, str) and "/" in a else a for a in args]
     changes = point_config_at_build(cfg, key, source_root)
+    changes += repair_model_paths(cfg, key)
     missing = [p for p in _paths_in(cfg) if not _exists(p)]
     if missing:
         cfg["_note"] = (f"Written by the Build tab for quant {key}. "

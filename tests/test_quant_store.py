@@ -286,6 +286,62 @@ class RunConfigTests(unittest.TestCase):
         self.assertIn("/data/packs/iq2_xs", cfg["_note"])
         self.assertIn("fill in", note)
 
+    def test_a_config_copied_from_another_install_points_at_this_projects_area(self) -> None:
+        """The data area belongs to the install, so a copied config is repointed at it."""
+        project = self.root / "HyperCore-WebUI"
+        project.mkdir()
+        area = self.root / "Strata-data"
+        other = self.root / "ai-user1" / "Strata-data"
+        (area / "packs" / "iq2_xs").mkdir(parents=True)
+        (area / "packs" / "iq2_xs" / "tokenizer").write_text("tok")
+        (area / "models" / "IQ2_XS").mkdir(parents=True)
+        (area / "models" / "IQ2_XS" / "model-00001.gguf").write_text("m")
+        base = json.loads(self.BASE)
+        base["tokenizer"] = str(other / "packs" / "iq2_xs" / "tokenizer")
+        base["args"] = ["--pack", str(other / "packs" / "iq2_xs"),
+                        "--native", str(other / "models" / "IQ2_XS" / "model-00001.gguf")]
+        base_text = json.dumps(base)
+        (self.config / "run-base.json").write_text(base_text, encoding="utf-8")
+        saved = quant_store.ROOT
+        quant_store.ROOT = project
+        try:
+            path, note = quant_store.ensure_run_config("IQ2_XS")
+        finally:
+            quant_store.ROOT = saved
+        self.assertIsNotNone(path, note)
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["tokenizer"], str(area / "packs" / "iq2_xs" / "tokenizer"))
+        self.assertEqual(cfg["args"][3], str(area / "models" / "IQ2_XS" / "model-00001.gguf"))
+        self.assertIn("data area", note)
+        self.assertEqual((self.config / "run-base.json").read_text(encoding="utf-8"), base_text,
+                         "the config the new one was copied from is left as it was")
+
+    def test_a_config_written_from_the_template_is_filled_from_the_data_area(self) -> None:
+        """A placeholder is a shape; the model files on this box are the answer."""
+        project = self.root / "HyperCore-WebUI"
+        project.mkdir()
+        area = self.root / "Strata-data"
+        (area / "packs" / "iq2_xs").mkdir(parents=True)
+        (area / "packs" / "iq2_xs" / "tokenizer").write_text("tok")
+        (area / "models" / "IQ2_XS").mkdir(parents=True)
+        (area / "models" / "IQ2_XS" / "Qwen3.8-Flash-Next-IQ2_XS-00001.gguf").write_text("m")
+        saved = quant_store.ROOT
+        quant_store.ROOT = project
+        try:
+            path, note = quant_store.ensure_run_config("IQ2_XS")
+        finally:
+            quant_store.ROOT = saved
+        self.assertIsNotNone(path, note)
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["tokenizer"], str(area / "packs" / "iq2_xs" / "tokenizer"))
+        self.assertEqual(cfg["args"][3],
+                         str(area / "models" / "IQ2_XS" / "Qwen3.8-Flash-Next-IQ2_XS-00001.gguf"))
+        self.assertIn("filled from the data area", note)
+        # the log is not model data, so it stays in the project's logs dir, not the area
+        self.assertTrue(str(cfg["log"]).startswith(str(self.root / "logs")), cfg.get("log"))
+        self.assertNotIn(str(area), str(cfg.get("log", "")))
+        self.assertEqual(cfg["model_name"], "qwen3.8-flash-next-iq2_xs")
+
     def test_an_existing_config_is_never_overwritten(self) -> None:
         path, note = quant_store.ensure_run_config("q2_0")
         self.assertEqual(path, self.config / "run-q2_0.json")
