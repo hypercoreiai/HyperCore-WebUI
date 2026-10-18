@@ -998,6 +998,61 @@ $("cfg-save").addEventListener("click", async () => {
   }
 });
 
+/* The Strata setup hook. The Config view can name a model path but cannot fetch a
+   model; this runs the upstream setup.py in a subprocess the server does not own
+   (its output goes to logs/strata-hook.log) and appends that log from a byte
+   offset, so a download that takes ten minutes never holds the page or the server. */
+let hookOffset = 0, hookTimer = null;
+
+function hookLog(lines) {
+  if (!lines || !lines.length) return;
+  const pre = $("strata-hook-log");
+  pre.hidden = false;
+  pre.textContent += lines.join("\n") + "\n";
+}
+
+function hookState(b) {
+  const stop = $("strata-hook-stop");
+  const run = $("strata-hook");
+  stop.hidden = b.state !== "running";
+  run.disabled = b.state === "running";
+  const msg = $("strata-hook-msg");
+  if (b.state === "running") msg.textContent = `running for ${b.elapsed_s}s - the log below is the setup script's own output`;
+  else if (b.state === "done") msg.textContent = `finished (exit ${b.exit_code})`;
+  else if (b.state === "failed") msg.textContent = `failed (exit ${b.exit_code})`;
+  else if (b.state === "cancelled") msg.textContent = "stopped";
+  else msg.textContent = b.note || "";
+}
+
+async function pollHook() {
+  let r;
+  try { r = await fetch(`config/strata-hook?offset=${hookOffset}`, {headers: headers()}); } catch (e) { return; }
+  if (!r.ok) return;
+  const b = await r.json();
+  hookOffset = b.offset || hookOffset;
+  hookLog(b.lines);
+  hookState(b);
+  if (b.state !== "running") {
+    clearInterval(hookTimer); hookTimer = null;
+  }
+}
+
+$("strata-hook").addEventListener("click", async () => {
+  $("strata-hook-log").textContent = ""; $("strata-hook-log").hidden = true;
+  hookOffset = 0;
+  const r = await fetch("config/strata-hook", {method: "POST", headers: headers(true), body: JSON.stringify({})});
+  const b = await r.json();
+  if (!r.ok) { toast("error", "The setup hook did not start", (b.error || "").trim() || `HTTP ${r.status}`, 8000); return; }
+  hookState(b);
+  hookTimer = setInterval(pollHook, 2000);
+  pollHook();
+});
+
+$("strata-hook-stop").addEventListener("click", async () => {
+  const r = await fetch("config/strata-hook/stop", {method: "POST", headers: headers(true)});
+  if (r.ok) pollHook();
+});
+
 // ------------------------------------------------------------------ Markdown (escaped first, then formatted)
 function inline(s) {
   const codes = [];
@@ -2510,6 +2565,19 @@ function renderBuildLog(job) {
   $("build-log").textContent = job.log.join("\n");
 }
 
+/* The build log is tailed from a byte offset: each poll gets only the lines written
+   since the last one, so a minute of cmake output is not re-sent every 3 seconds. */
+let buildOffset = 0;
+async function pollBuildLog() {
+  const s = await (await fetch(`build/log?offset=${buildOffset}`, { headers: headers() })).json();
+  if (s.lines && s.lines.length) {
+    $("view-build .build-log").hidden = false;
+    $("build-log").textContent += s.lines.join("\n") + "\n";
+  }
+  buildOffset = s.offset || buildOffset;
+  return s;
+}
+
 $("build-fetch").onclick = async () => {
   const r = await fetch("build/fetch-prebuilt", {
     method: "POST", headers: headers(true), body: JSON.stringify({ tag: $("build-tag").value })});
@@ -2523,9 +2591,9 @@ $("build-start").onclick = async () => {
   const r = await fetch("build/start", {
     method: "POST", headers: headers(true), body: JSON.stringify({ tag: $("build-tag").value, options })});
   renderBuildLog(await r.json());
+  buildOffset = 0;
   const poll = setInterval(async () => {
-    const s = await (await fetch("build/log", { headers: headers() })).json();
-    renderBuildLog(s);
+    const s = await pollBuildLog();
     if (s.state === "done" || s.state === "failed") { clearInterval(poll); loadBuild(); }
   }, 3000);
 };

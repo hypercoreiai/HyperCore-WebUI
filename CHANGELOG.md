@@ -67,6 +67,32 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   starts a stopped engine rather than trying to load into a process that is gone.
   Closing the whole server moved to the Monitor tab under Model state, "Close this
   server", which is the same path Ctrl+C and SIGTERM take.
+- **The engine still runs when the worker was not built**: `hypercore-worker` is
+  HyperCore's process boundary, not part of upstream Strata. A server started with
+  `--engine hypercore` and no worker binary now falls back to driving the engine over
+  its own stdin/stdout protocol (`serve/direct_engine.py`) instead of exiting, and says
+  so in the server output and in the Monitor's Model state card
+  (`tests/test_direct_fallback.py`). `tools/build_engine.sh` and `tools/build_engine.bat`
+  do the same at build time: if the worker target fails, `strata` and `strata-vision`
+  are still built and `engine/BUILD.json` records `"worker": false`.
+- **`/health` says what the engine is, not just that the server is up**: `status` is
+  `"offline"` when no model is loaded, and `engine` carries `state`, a machine-readable
+  `code` (`ui_only`, `gpu_busy`, `stopped`, `no_model`, `unloaded_or_compiling`) and the
+  reason. Every non-generation route (`/config`, `/mcp`, `/build/status`, `/tune/status`,
+  `/metrics`, `/v1/status`, the page itself) is verified to answer with no engine at all
+  (`tests/test_offline_tabs.py`).
+- **The Config view can fetch the model**: "Run Strata setup" in the Model settings card
+  runs the upstream `setup.py` of a Strata checkout as a detached subprocess whose output
+  goes to `logs/strata-hook.log`, and streams that log into the page from a byte offset.
+  `POST /config/strata-hook`, `GET /config/strata-hook`, `POST /config/strata-hook/stop`
+  (`serve/strata_hook.py`, `tests/test_strata_hook.py`, `tests/test_strata_hook_ui.js`).
+  A checkout inside `tmp/` is refused: that folder is deleted when a build finishes.
+- **The build log is tailed, not re-sent**: `GET /build/log?offset=<n>` returns only the
+  lines written since that offset, and the same lines are written to
+  `logs/build-<tag>.log` as the build runs (`serve/build_api.py`, `tests/test_build_api.py`).
+- **`run.bat` takes the same flags as `run.sh`**: every `-` flag after the config name is
+  forwarded to the server, and `--ui-only` is documented on both platforms
+  (`tests/test_run_scripts.py` checks the pairs match).
 - **Monitor history card**: the Monitor tab shows what is in the archive (transcripts, chat
   summaries, topic files, notes, the newest transcript, the last rebuild and its duration)
   and has a "Rebuild now" button that runs the builder on request. The card is hidden until

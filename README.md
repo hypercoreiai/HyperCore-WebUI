@@ -216,6 +216,27 @@ history rebuild. What does not: a chat request. It is answered `503 engine_unava
 with the reason and a `Retry-After`, and the Chat tab shows a banner saying so with a
 Load button.
 
+`GET /health` is the contract the page reads: `status` is `"offline"` when no model
+is loaded, `loaded` is false, and `engine` carries `state`, a machine-readable `code`
+(`ui_only`, `gpu_busy`, `stopped`, `no_model`, `unloaded_or_compiling`) and the
+sentence the banner shows. The other tabs are never gated on it.
+
+### If the worker was never built
+
+`hypercore-worker` is HyperCore's process boundary, not part of upstream Strata. A
+machine that only built the engine has no worker binary, and the server does not
+refuse to start: it drives the same engine over its own stdin/stdout protocol
+(`serve/direct_engine.py`) and says so:
+
+```
+[hypercore] worker: not built (/path/to/hypercore-worker is not there). Running the engine in direct mode ...
+```
+
+The Monitor's Model state card reports the worker as `not built (engine runs in direct mode)`, and
+`tools/build_engine.sh` (and the `.bat`) fall back to building `strata` and `strata-vision`
+alone when the worker target is what fails, recording `"worker": false` in `engine/BUILD.json`.
+
+
 The engine is retried in a background thread every `engine_retry_s` seconds (default
 30, `"engine_retry_s"` in the run config, `--engine-retry-s` on the command line, 0
 to turn it off). Pressing Load tries once, immediately. When the card is free the
@@ -239,13 +260,36 @@ The retry then holds off for as long as that sweep runs.
 2. Queries the GitHub releases API for `Niko1221/Strata`.
 3. Either downloads the ready-made archive for this OS and verifies its published
    SHA-256, or shallow-clones the release into `tmp/`, builds it, and copies the
-   binaries into `engine/`.
+   binaries into `engine/`. One cmake invocation builds all three targets
+   (`strata`, `strata-vision`, `hypercore-worker`); if the worker target is what
+   fails, the engine and the vision engine are still built and the fallback is
+   recorded in `engine/BUILD.json` as `"worker": false`.
 4. The build dropdowns are extracted from the cloned release's own
    `CMakeLists.txt` and `setup.py` by `tools/extract_build_options.py`, and
    diffed against the previous manifest so the tab can show what changed.
 
 `tmp/` holds exactly one clone, is deleted when a build finishes, and is never
-read at runtime. Deleting it changes nothing.
+read at runtime. Deleting it changes nothing. The build log is also written to
+`logs/build-<tag>.log`; the tab reads it with `GET /build/log?offset=<n>`, so each
+poll gets only the lines written since the last one.
+
+## Fetching the model from the page
+
+The About tab's Model settings card has the paths a model needs but cannot download
+them. "Run Strata setup" runs the upstream `setup.py` of a Strata checkout in a
+detached subprocess and streams its log into the page:
+
+```bash
+POST /config/strata-hook {"path": "/path/to/strata", "args": ["--yes", "--no-start"]}
+GET  /config/strata-hook?offset=1234      # state plus the log from that byte onward
+POST /config/strata-hook/stop
+```
+
+With no `path` the hook looks for `strata/` next to this project, or `HYPERCORE_STRATA_SRC` /
+`STRATA_SRC`. It refuses a checkout inside `tmp/`, because that folder is deleted when a
+build finishes and a model download has to survive. The output goes to `logs/strata-hook.log`;
+the request returns as soon as the process is spawned, so a ten-minute download never
+blocks the server.
 
 ## How the Tune tab works
 

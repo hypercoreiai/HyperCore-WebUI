@@ -256,9 +256,15 @@ servers:
         for key, value in settings.items():
             self.assertEqual(hub.settings[key], value)
         # the caps the project ships, checked against the file rather than against DEFAULTS,
-        # so a change to the shipped config is caught here and not silently accepted
+        # so a change to the shipped config is caught here and not silently accepted.
+        # The shipped pair is 500 rounds with 200 tool calls: a turn can never run more
+        # calls than it has rounds, and the results are condensed from the 4th call at
+        # 2400 characters rather than the 2nd at 1200. Changing one means changing this.
         self.assertEqual(hub.settings["max_rounds"], 500)
-        self.assertEqual(hub.settings["max_tool_calls"], 500)
+        self.assertEqual(hub.settings["max_tool_calls"], 200)
+        self.assertLessEqual(hub.settings["max_tool_calls"], hub.settings["max_rounds"])
+        self.assertEqual(hub.settings["condense_after"], 4)
+        self.assertEqual(hub.settings["condense_chars"], 2400)
 
 
 class Hub(unittest.TestCase):

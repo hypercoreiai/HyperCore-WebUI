@@ -1,10 +1,12 @@
 @echo off
+setlocal enabledelayedexpansion
 rem Start the HyperCore WebUI on Windows. Same behaviour as run.sh.
 rem
 rem   run.bat                 newest run config in config\, else engine\strata.exe
 rem   run.bat q2_0           config\run-q2_0.json
 rem   run.bat config\my.json a path, verbatim
 rem   run.bat --no-attach   flags after the name are passed to the server as they are
+rem   run.bat --ui-only     the app without an engine: usable while the GPU is busy
 rem
 rem Host, port and API key default to 0.0.0.0, 8081 and 0000; set HYPERCORE_HOST,
 rem HYPERCORE_PORT or HYPERCORE_API_KEY to change them. HYPERCORE_ENGINE_URL makes
@@ -57,8 +59,10 @@ if defined HYPERCORE_ENGINE_URL set MODE=attach
 set ARGS=--engine %MODE% --host %HYPERCORE_HOST% --port %HYPERCORE_PORT% --api-key %HYPERCORE_API_KEY% --open
 if defined CFG set ARGS=%ARGS% --config "%CFG%"
 if defined HYPERCORE_ENGINE_URL set ARGS=%ARGS% --engine-url %HYPERCORE_ENGINE_URL%
+rem Flags after the name are passed to the server as they are, exactly as run.sh does.
 for %%a in (%*) do (
-    if "%%a"=="--no-attach" set ARGS=%ARGS% --no-attach
+    set "flag=%%a"
+    if "!flag:~0,1!"=="-" set ARGS=!ARGS! %%a
 )
 
 if defined CFG (

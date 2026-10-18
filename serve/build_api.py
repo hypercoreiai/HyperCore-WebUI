@@ -130,6 +130,7 @@ class BuildJob:
         self.lock = threading.Lock()
         self.state = "idle"          # idle | cloning | configuring | building | transferring | done | failed
         self.log: list[str] = []
+        self.log_path: Path | None = None   # the same lines, on disk, for a tail reader
         self.version: str | None = None
         self.started: float | None = None
         self.result: dict[str, Any] | None = None
@@ -146,6 +147,32 @@ class BuildJob:
 
     def log_line(self, line: str) -> None:
         self.log.append(line)
+        if self.log_path:
+            try:
+                with open(self.log_path, "a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except OSError:
+                pass  # the in-memory log is the record; a log file is a convenience
+
+    def tail(self, offset: int = 0) -> dict[str, Any]:
+        """The build log from a byte offset onward.
+
+        The tab polls this while a build runs. Reading the whole 400-line log every
+        poll is the difference between a tab that streams and one that re-sends.
+        """
+        if not self.log_path:
+            return {"lines": [], "offset": 0, "bytes": 0}
+        try:
+            data = self.log_path.read_bytes()
+        except OSError:
+            return {"lines": [], "offset": 0, "bytes": 0}
+        offset = max(0, min(int(offset), len(data)))
+        chunk = data[offset:]
+        cut = chunk.rfind(b"\n")
+        if cut >= 0:
+            chunk = chunk[:cut + 1]     # stop at a complete line; the next read starts clean
+        return {"lines": [line.decode("utf-8", errors="replace").rstrip() for line in chunk.splitlines()],
+                "offset": offset + len(chunk), "bytes": len(data)}
 
     def run_stream(self, cmd: list[str]) -> int:
         self.log_line("$ " + " ".join(cmd))
@@ -171,12 +198,39 @@ class BuildJob:
             if path.is_dir() and path.name.startswith("strata-"):
                 shutil.rmtree(path, ignore_errors=True)
 
+    def build_targets(self, build_dir: Path) -> bool:
+        """Build the three targets in one cmake invocation.
+
+        Returns whether the HyperCore worker was built. The interface is ours and the
+        engine is upstream's: when the worker target is what fails against a given
+        Strata revision, strata and strata-vision are still buildable, and the server
+        drives the engine over its stdin/stdout protocol instead (serve/direct_engine.py).
+        The fallback is logged and flagged in engine/BUILD.json so the Monitor can say
+        "worker: not built" rather than reporting the whole build as failed.
+        """
+        nproc = str(os.cpu_count() or 4)
+        # one --target with the list: repeating the flag keeps only the last one
+        code = self.run_stream(["cmake", "--build", str(build_dir),
+                               "--target", "strata", "strata-vision", "hypercore-worker",
+                               "-j", nproc])
+        if code == 0:
+            return True
+        self.log_line("the hypercore-worker target failed; building strata and strata-vision only")
+        code = self.run_stream(["cmake", "--build", str(build_dir),
+                               "--target", "strata", "strata-vision", "-j", nproc])
+        if code != 0:
+            raise RuntimeError("the engine build failed")
+        self.log_line("worker: not built - the engine runs in direct mode")
+        return False
+
     def start(self, tag: str, options: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             if self.state not in ("idle", "done", "failed"):
                 return {"error": "a build is already running"}
             self.state = "cloning"
             self.log = []
+            (ROOT / "logs").mkdir(parents=True, exist_ok=True)
+            self.log_path = ROOT / "logs" / f"build-{tag}.log"
             self.version = tag
             self.started = time.time()
             self.result = None
@@ -222,13 +276,7 @@ class BuildJob:
             code = self.run_stream(["cmake", "-G", "Ninja", "-S", str(clone), "-B", str(build_dir), *defs])
             if code != 0:
                 raise RuntimeError("cmake configure failed")
-            targets = ["strata", "strata-vision", "hypercore-worker"]
-            # one --target with the list: repeating the flag keeps only the last one
-            code = self.run_stream(["cmake", "--build", str(build_dir),
-                                   "--target", *targets,
-                                   "-j", str(os.cpu_count() or 4)])
-            if code != 0:
-                raise RuntimeError("the engine build failed")
+            worker_built = self.build_targets(build_dir)
 
             self.state = "transferring"
             ENGINE_DIR.mkdir(parents=True, exist_ok=True)
@@ -243,6 +291,7 @@ class BuildJob:
                 "version": m.get("version") or tag,
                 "tag": tag,
                 "archs": options.get("STRATA_CUDA_ARCH_LIST", ""),
+                "worker": worker_built,
                 "built_at": _now(),
                 "src": hashlib.sha256((clone / "CMakeLists.txt").read_bytes()).hexdigest()[:16],
             }

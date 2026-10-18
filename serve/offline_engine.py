@@ -40,6 +40,26 @@ class EngineUnavailable(RuntimeError):
         self.retry_after = float(retry_after_s)
 
 
+#: A machine-readable cause of an offline engine. The banner and the 503 body carry the
+#: sentence a person can act on; a client that branches on the reason reads this instead.
+#: "unloaded_or_compiling" is the catch-all: the engine was asked for and is not here yet.
+UNLOADED_CODE = "unloaded_or_compiling"
+
+
+def reason_code(detail: str) -> str:
+    """Classify an engine's failure in one token, from the words the engine itself used."""
+    low = (detail or "").lower()
+    if "ui-only" in low or "no engine was asked for" in low:
+        return "ui_only"
+    if "gpu is held" in low or "busy" in low or "card is in use" in low:
+        return "gpu_busy"
+    if "stopped" in low:
+        return "stopped"
+    if "no run config" in low or "no model" in low or "missing model" in low:
+        return "no_model"
+    return UNLOADED_CODE
+
+
 def _brief(text: str) -> str:
     """The last line of an engine's error, which is where engines put their conclusion
     ("the machine has no room for a second engine: stop the other one"). The full text
@@ -86,7 +106,8 @@ class OfflineEngine:
         return None
 
     def status(self) -> dict[str, Any]:
-        return {"state": "offline", "reason": self.reason, "detail": self.detail,
+        return {"state": "offline", "code": reason_code(self.detail),
+                "reason": self.reason, "detail": self.detail,
                 "model": self.model, "retry_after_s": self.retry_after_s}
 
 
@@ -212,7 +233,7 @@ class EngineRetry:
         state = ("paused" if self.paused_reason else
                 "running" if self.succeeded else
                 "retrying" if self.running else "stopped")
-        return {"state": state,
+        return {"state": state, "code": reason_code(self.last_error),
                "reason": self.last_error,
                "detail": self.detail,
                "paused": bool(self.paused_reason),

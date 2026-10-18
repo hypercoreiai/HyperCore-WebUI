@@ -62,8 +62,9 @@ from serve import (
 )
 from serve import prompts as agent_prompts
 from serve import responses as responses_api
-from serve import build_api, chat_archive, tune_api
-from serve.offline_engine import DEFAULT_RETRY_S, EngineRetry, EngineUnavailable, OfflineEngine
+from serve import build_api, chat_archive, strata_hook, tune_api
+from serve.offline_engine import (DEFAULT_RETRY_S, EngineRetry, EngineUnavailable, OfflineEngine,
+                                 UNLOADED_CODE)
 from serve.frontend import (
     ChatTemplate,
     Event,
@@ -3756,6 +3757,17 @@ def make_handler(svc: Service):
                 if self._authorized():
                     self._json(200, {"shared": bool(svc.shared), "defaults": svc.shared})
                 return
+            if path == "/config/strata-hook":               # the upstream Strata setup hook: state, and the log tail
+                if self._authorized():
+                    offset = 0
+                    query = self.path.split("?")[1] if "?" in self.path else ""
+                    if "offset=" in query:
+                        try:
+                            offset = int(query.split("offset=")[1].split("&")[0])
+                        except ValueError:
+                            offset = 0
+                    self._json(200, {**strata_hook.JOB.status(), **strata_hook.JOB.tail(offset)})
+                return
             if path == "/config":                            # #564: the Settings view's keys of the run config
                 if self._authorized():
                     self._config_get()
@@ -3870,18 +3882,38 @@ def make_handler(svc: Service):
                 self.end_headers()
                 self.wfile.write(body)
             elif path in ("/health", "/api/health"):
-                engine_state = (svc.engine.status() if isinstance(svc.engine, OfflineEngine)
-                                else {"state": "running"})
+                if isinstance(svc.engine, OfflineEngine):
+                    engine_state = svc.engine.status()
+                elif svc.loaded():
+                    engine_state = {"state": "running"}
+                else:
+                    # A real engine whose process is gone: say so in its own words rather
+                    # than reporting "running" for a process that is not there.
+                    note = ""
+                    for name in ("death_note", "last_stderr"):
+                        get = getattr(svc.engine, name, None)
+                        if callable(get):
+                            note = str(get() or "")
+                            if note:
+                                break
+                    engine_state = {"state": "offline", "code": UNLOADED_CODE,
+                                   "reason": note or "the engine is not running", "detail": note}
                 # A Stop from the app leaves the engine object in place with no process
                 # behind it, so "running" would be a lie: the page would paint a Stop
                 # button over an engine that is already down.
                 if getattr(svc, "engine_stopped", False):
                     engine_state["state"] = "offline"
                     engine_state["stopped"] = True
+                    engine_state.setdefault("code", "stopped")
                     engine_state.setdefault("reason", "the engine was stopped from this app")
+                engine_state.setdefault("code", "running" if engine_state.get("state") == "running" else UNLOADED_CODE)
                 if svc.engine_retry:
                     engine_state["retry"] = svc.engine_retry.status()
-                self._json(200, {"status": "ok", "max_context": svc.engine.max_context, "model": svc.model,
+                # "status" is the engine's, not the server's: this HTTP server is up even
+                # when no model is, and the page uses the engine state to mask the chat
+                # while leaving the other tabs interactive.
+                self._json(200, {"status": "ok" if svc.loaded() else "offline",
+                                 "max_context": svc.engine.max_context, "model": svc.model,
                                  "images": svc.vision is not None, "api_key": bool(svc.api_key),
                                  "loaded": svc.loaded(), "service": "hypercore",
                                  "engine": engine_state})
@@ -3983,6 +4015,26 @@ def make_handler(svc: Service):
             if path == "/settings":
                 self._settings()
                 return
+            if path == "/config/strata-hook":
+                # PLAN 10.1: run the installed Strata setup.py from the page. The subprocess
+                # is detached and its output goes to a file in logs/; this call returns as
+                # soon as it is spawned, so a model download never holds the request loop.
+                try:
+                    body = json.loads(self._body() or b"{}")
+                except ValueError:
+                    body = {}
+                if not isinstance(body, dict):
+                    body = {}
+                args = body.get("args")
+                if not isinstance(args, list):
+                    args = None
+                result = strata_hook.JOB.start(str(body.get("path") or "") or None,
+                                             [str(a) for a in args] if args else None)
+                self._json(200 if result.get("state") == "running" else 400, result)
+                return
+            if path == "/config/strata-hook/stop":
+                self._json(200, strata_hook.JOB.cancel())
+                return
             if path == "/config":
                 self._config_post()
                 return
@@ -4066,7 +4118,15 @@ def make_handler(svc: Service):
                                                        req.get("options") or {}))
                     return
                 if path == "/build/log":
-                    self._json(200, build_api.JOB.status())
+                    # the tail from a byte offset, so the tab appends instead of re-reading
+                    offset = 0
+                    query = self.path.split("?")[1] if "?" in self.path else ""
+                    if "offset=" in query:
+                        try:
+                            offset = int(query.split("offset=")[1].split("&")[0])
+                        except ValueError:
+                            offset = 0
+                    self._json(200, {**build_api.JOB.status(), **build_api.JOB.tail(offset)})
                     return
                 if path == "/build/cancel":
                     self._json(200, build_api.JOB.cancel())
@@ -5474,7 +5534,7 @@ def main() -> int:
         tokens = [None] * len(vocab)
         for t, i in vocab.items():
             tokens[i] = t
-        merges = (tpath / "merges.txt").read_text(encoding="utf-8").split("\n")
+        merges = [m for m in (tpath / "merges.txt").read_text(encoding="utf-8").split("\n") if m.strip()]
         types = json.loads((tpath / "token_type.json").read_text())
         tok = ST.Tokenizer(tokens, merges, types)
     hub = hub_from_config(cfg, a.mcp_config, yaml_path=mcp_yaml())   # before the minutes of loading: a bad entry stops here
@@ -5593,24 +5653,42 @@ def main() -> int:
         if not Path(worker_binary).is_absolute():
             worker_binary = str(Path(cfg.get("cwd") or ".").resolve() / worker_binary)
         if not Path(worker_binary).is_file():
-            raise SystemExit(f"[hypercore] no worker binary at {worker_binary}: "
-                            "cmake --build build-shared --target hypercore-worker")
-        socket_path = a.ipc_socket or cfg.get("ipc_socket") or f"/tmp/hypercore-worker-{a.port}.sock"
-        # A worker with no model binds its socket in milliseconds. A worker that has to load
-        # weights - the pack, the expert arena, the VRAM tier - takes the "minute or two" the
-        # run script warns about, and the default 30s would kill a healthy load. The config
-        # can set it; otherwise a model config gets a minute and a half.
-        startup_s = model_startup_s(cfg)
-        supervisor = HyperCoreProcessSupervisor(
-            worker_binary=worker_binary,
-            socket_path=socket_path,
-            config=worker_config,
-            stderr_log=cfg.get("log"),
-            startup_timeout_s=startup_s,
-            silence_s=silence,                    # #481: the stream's own wall, not the handshake's
-            env=cfg.get("env") or {},            # #1733: the engine settings the calibration wrote for this PC
-        )
-        engine = HyperCoreRequestHandler(supervisor)
+            # The worker is HyperCore's process boundary, not part of upstream Strata.
+            # If it was never built, the same engine is still drivable over its own
+            # stdin/stdout protocol, so the app runs in direct mode rather than refusing
+            # to start. serve/direct_engine.py is that path.
+            from serve.direct_engine import DirectEngine
+            print(f"[hypercore] worker: not built ({worker_binary} is not there). "
+                  "Running the engine in direct mode over its stdin/stdout protocol. "
+                  "Build the worker with: cmake --build build-shared --target hypercore-worker",
+                  flush=True)
+            engine = DirectEngine(exe, cfg.get("args") or [], startup_timeout_s=model_startup_s(cfg),
+                                 env=child_env(cfg), log_path=cfg.get("log"))
+            try:
+                engine.start()
+            except Exception as exc:  # noqa: BLE001 - an engine that will not start is reported, not raised
+                engine_candidate, engine, engine_unavailable = engine, OfflineEngine(
+                    str(exc), model=cfg.get("model_name") or "no model loaded"), str(exc)
+                print(f"[strata] {exc}", flush=True)
+                print(f"[hypercore] the web app is up anyway; the engine is retried in the "
+                      f"background every {engine.retry_after_s:g} s.", flush=True)
+        else:
+            socket_path = a.ipc_socket or cfg.get("ipc_socket") or f"/tmp/hypercore-worker-{a.port}.sock"
+            # A worker with no model binds its socket in milliseconds. A worker that has to load
+            # weights - the pack, the expert arena, the VRAM tier - takes the "minute or two" the
+            # run script warns about, and the default 30s would kill a healthy load. The config
+            # can set it; otherwise a model config gets a minute and a half.
+            startup_s = model_startup_s(cfg)
+            supervisor = HyperCoreProcessSupervisor(
+                worker_binary=worker_binary,
+                socket_path=socket_path,
+                config=worker_config,
+                stderr_log=cfg.get("log"),
+                startup_timeout_s=startup_s,
+                silence_s=silence,                    # #481: the stream's own wall, not the handshake's
+                env=cfg.get("env") or {},            # #1733: the engine settings the calibration wrote for this PC
+            )
+            engine = HyperCoreRequestHandler(supervisor)
         if not lazy and not engine.restart():
             engine_candidate, engine, engine_unavailable = engine, OfflineEngine(
                 "the worker did not complete the READY handshake (the GPU is busy, or the "

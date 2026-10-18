@@ -227,6 +227,15 @@
         <form class="cfg-form" id="cfg-form"></form>
         <div class="cfg-actions"><button class="st-btn st-btn--primary" id="cfg-save" type="button">Save</button>
           <span class="muted small" id="cfg-msg" role="status"></span></div>
+        <!-- The model files are not downloaded here: this runs the upstream Strata setup
+             script in a detached subprocess and streams its log. The server returns as
+             soon as the process is spawned, so a ten-minute download never blocks the page. -->
+        <div class="cfg-actions">
+          <button class="st-btn" id="strata-hook" type="button">Run Strata setup</button>
+          <button class="st-btn" id="strata-hook-stop" type="button" hidden>Stop</button>
+          <span class="muted small" id="strata-hook-msg" role="status"></span>
+        </div>
+        <div class="build-log"><pre id="strata-hook-log" hidden></pre></div>
       </div>
     </div>
   </section>

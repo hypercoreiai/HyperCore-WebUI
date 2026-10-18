@@ -313,9 +313,11 @@ class ServerEndToEndTests(unittest.TestCase):
         self.offline_server()
         status, body = self.get("/health", key=False)
         self.assertEqual(status, 200, body)
-        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["status"], "offline", "the page masks the chat on this field")
         self.assertFalse(body["loaded"])
         self.assertEqual(body["engine"]["state"], "offline")
+        self.assertEqual(body["engine"]["code"], "gpu_busy",
+                         "a reason a client can branch on, not only a sentence")
         self.assertIn("GPU is held", body["engine"]["reason"])
 
     def test_the_chat_is_refused_with_a_reason_and_a_retry_after(self) -> None:
