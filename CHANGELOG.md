@@ -172,7 +172,9 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   request may run. `mcp.max_rounds` bounds the assistant turns that may emit calls, and
   one turn can emit several calls, so the round cap alone is not a call cap. Calls past
   the cap are closed as "not run" and the turn ends; the chat line now names the cap that
-  was actually hit and how many calls ran.
+  was actually hit and how many calls ran. The shipped `config/mcp.yaml` sets 200 rather
+  than the 500 default, with `condense_after` 4 and `condense_chars` 2400, and the comment
+  above those lines says why and how to raise it.
 - **Windows**: `run.bat`, `setup.bat`, `tools/build_engine.bat`.
 - **Tests**: `tools/run_tests.sh` runs the pytest suite and the browser-free JS
   checks that read `serve/web/app.js` as text.

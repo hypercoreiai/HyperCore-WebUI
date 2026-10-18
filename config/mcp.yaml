@@ -30,6 +30,11 @@
 # max_tool_calls: how many tool calls may actually run in one request. A round can
 # announce several calls, so the round cap alone is not a call cap: the calls that
 # fit are run and the rest are closed as "not run". 0 = no separate call cap.
+# The code default (serve/mcp/__init__.py) is 500, the same as max_rounds. This file
+# ships 200 on purpose: at max_result_chars 6000, 500 calls is about 3 MB of prompt,
+# well past a 262,144-token context, so the call cap is what keeps a long tool-using
+# turn inside the window instead of a 400. Raise it here if the machine has the
+# headroom; the tool round line in the chat names whichever cap actually bit.
 
 timeout_s: 90
 max_result_chars: 6000
