@@ -52,6 +52,11 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   the data arrives and disabled while a rebuild is in flight. `GET /history/status` supplies
   it, and the counts are of `.md` files only, so a helper script left in the folder is not
   reported as a transcript (`tests/test_monitor_history_card.js`).
+- **Install-wide off switch for the end-of-turn check**: `HYPERCORE_NO_TURN_TAIL_CHECK` beats
+  `--turn-tail-check` and `"turn_tail_check": true` in any run config, so a machine running
+  several models can turn it off once instead of in every config. The decision is a single
+  function, `serve/server.py:resolve_turn_tail`, and the server says out loud when the switch
+  overrode a request (`tests/test_turn_tail_check.py`).
 - **Tool call cap**: `mcp.max_tool_calls` (default 500) bounds the tool calls a single
   request may run. `mcp.max_rounds` bounds the assistant turns that may emit calls, and
   one turn can emit several calls, so the round cap alone is not a call cap. Calls past

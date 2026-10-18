@@ -283,6 +283,23 @@ unit) and states a fact about it. Keys and addresses are replaced with markers, 
 against an older project name are rewritten to the ones that exist here, and restatements of
 the same finding are merged with every source kept as provenance.
 
+## The end-of-turn check
+
+`--turn-tail-check` (or `"turn_tail_check": true` in a run config) makes the server ask the
+model, at the end of a turn, whether every task in the request is done. A bare confirmation ends
+the turn; a "no" or a mention of remaining work keeps it going, up to `turn_tail_checks` times
+(default 3). It is off by default.
+
+A run config is per model. To switch the behaviour off for a whole install, whatever every model
+config and every command line says:
+
+```bash
+HYPERCORE_NO_TURN_TAIL_CHECK=1 ./run.sh
+```
+
+The server prints that the request was overridden, and `GET /v1/status` reports
+`"turn_tail": {"enabled": false}`.
+
 ## Layout
 
 ```

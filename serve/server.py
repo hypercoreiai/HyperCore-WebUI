@@ -5328,6 +5328,24 @@ def mcp_yaml() -> str:
     return str(ROOT / "mcp.yaml")
 
 
+def _env_off(name: str, env: dict[str, str]) -> bool:
+    """True when an install-wide switch is set to a value that means off."""
+    return str(env.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_turn_tail(cli_flag: bool, cfg: dict, env: dict[str, str] | None = None) -> bool:
+    """Whether the end-of-turn "is the work done?" check runs for this server.
+
+    Order, highest first: `HYPERCORE_NO_TURN_TAIL_CHECK` (a whole install, whatever
+    every run config says), then `--turn-tail-check`, then `"turn_tail_check": true`
+    in the model's run config. Off unless one of them says otherwise.
+    """
+    env = os.environ if env is None else env
+    if _env_off("HYPERCORE_NO_TURN_TAIL_CHECK", env):
+        return False
+    return bool(cli_flag or cfg.get("turn_tail_check") is True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--engine", choices=["mock", "hypercore", "strata", "attach"], default="mock",
@@ -5376,7 +5394,8 @@ def main() -> int:
     ap.add_argument("--turn-tail-check", action="store_true",
                     help="at the end of a turn, ask the model whether every task in the request is done: a bare "
                          "confirmation ends the turn, a no or more work keeps it going (also turn_tail_check: true "
-                         "in the config; off by default)")
+                         "in the config; off by default; HYPERCORE_NO_TURN_TAIL_CHECK turns it off for a whole "
+                         "install whatever the flag or the config says)")
     ap.add_argument("--turn-tail-checks", type=int, default=None, metavar="N",
                     help="how many times one turn may be asked (default 3; also \"turn_tail_checks\" in the config)")
     ap.add_argument("--idle-unload", type=float, default=None, metavar="SECONDS",
@@ -5611,7 +5630,10 @@ def main() -> int:
     if isinstance(rs, bool) or not isinstance(rs, int) or rs < 0:
         raise SystemExit(f"[hypercore] config \"repeat_stop_tokens\" must be a whole number >= 0 (0 = off), not {rs!r}")
     svc.repeat_stop_tokens = rs
-    tail = bool(a.turn_tail_check or cfg.get("turn_tail_check") is True)   # the end-of-turn "is it done?" check
+    tail = resolve_turn_tail(a.turn_tail_check, cfg)   # the end-of-turn "is it done?" check
+    if not tail and (a.turn_tail_check or cfg.get("turn_tail_check") is True):
+        print("[hypercore] the turn-tail check was asked for but HYPERCORE_NO_TURN_TAIL_CHECK is "
+              "set: it is off for this install", flush=True)
     svc.turn_tail_check = tail
     checks = a.turn_tail_checks if a.turn_tail_checks is not None else cfg.get("turn_tail_checks", TAIL_CHECK_MAX)
     if isinstance(checks, bool) or not isinstance(checks, int) or not 0 <= checks <= 10:
