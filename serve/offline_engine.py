@@ -46,7 +46,7 @@ class EngineUnavailable(RuntimeError):
 UNLOADED_CODE = "unloaded_or_compiling"
 
 
-def reason_code(detail: str) -> str:
+def reason_code(detail: str | None) -> str:
     """Classify an engine's failure in one token, from the words the engine itself used."""
     low = (detail or "").lower()
     if "ui-only" in low or "no engine was asked for" in low:
@@ -195,7 +195,7 @@ class EngineRetry:
                                         or "the engine did not come up")
         except Exception as exc:  # noqa: BLE001 - a retry must never take the server with it
             self.detail = str(exc)
-            self.last_error = _brief(exc)
+            self.last_error = _brief(str(exc))
         self._next = time.time() + self.interval_s
         self._ensure_thread()
         return self.status()
@@ -227,7 +227,7 @@ class EngineRetry:
                                         or "the engine did not come up")
             except Exception as exc:  # noqa: BLE001 - a retry must never take the server with it
                 self.detail = str(exc)
-                self.last_error = _brief(exc)
+                self.last_error = _brief(str(exc))
 
     def status(self) -> dict[str, Any]:
         state = ("paused" if self.paused_reason else

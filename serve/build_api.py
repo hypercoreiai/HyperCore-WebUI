@@ -258,7 +258,10 @@ class BuildJob:
             self.state = "configuring"
             prev = json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.is_file() else None
             sys.path.insert(0, str(ROOT / "tools"))
-            from extract_build_options import diff, manifest  # a local tool, not a package
+            from extract_build_options import (  # a local tool, not a package
+                diff,
+                manifest,
+            )
             m = manifest(clone)
             if prev:
                 m["changes"] = diff(prev, m)

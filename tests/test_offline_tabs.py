@@ -153,7 +153,7 @@ class OfflineServerTests(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=10) as r:
                 payload = json.loads(r.read())
         except urllib.error.HTTPError as e:
-            self.fail(f"POST /config answered {e.code}: {e.read()[:200]}")
+            self.fail(f"POST /config answered {e.code}: {e.read().decode(errors='replace')[:200]}")
         self.assertIn("sampling.temperature", payload.get("changed", []))
         status, body = self.get("/config")
         self.assertEqual(status, 200, body)
