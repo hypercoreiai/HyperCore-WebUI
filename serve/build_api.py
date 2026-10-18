@@ -92,6 +92,30 @@ def latest_release() -> dict[str, Any]:
     return {"repo": REPO, "releases": releases, "checked_at": _now()}
 
 
+def build_status() -> dict[str, Any]:
+    """Everything the Build tab needs in one call.
+
+    `latest` is the whole listing ({repo, releases, checked_at}, or {error, releases: []}
+    when GitHub cannot be reached) so the tab can fill its version dropdown; `newest` is
+    the single release the update note points at. They were one and the same object once,
+    which is why the dropdown never populated: the page reads `latest.releases` and got a
+    single release back.
+    """
+    installed = installed_version()
+    listing = latest_release()
+    releases = listing.get("releases") or []
+    newest = releases[0] if releases else None
+    have = installed.get("version")
+    return {
+        "installed": installed,
+        "latest": listing,
+        "newest": newest,
+        "update_available": bool(newest and have and newest.get("version") != have),
+        "options": json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.is_file() else None,
+        "job": JOB.status(),
+    }
+
+
 def published_digests(release: dict[str, Any]) -> dict[str, str]:
     """The SHA256.txt a release publishes, as {asset name: digest}."""
     for a in release.get("assets", []):

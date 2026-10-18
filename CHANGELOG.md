@@ -104,6 +104,13 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   several models can turn it off once instead of in every config. The decision is a single
   function, `serve/server.py:resolve_turn_tail`, and the server says out loud when the switch
   overrode a request (`tests/test_turn_tail_check.py`).
+- **The Build tab's release dropdown was empty.** `GET /build/status` put the newest
+  single release under `latest` while the page read `latest.releases`, so the box never
+  filled and the note fell back to "could not reach GitHub". The route now returns the
+  whole listing under `latest` and the newest release under `newest`, assembled by one
+  function `serve/build_api.py:build_status`. The dropdown also carries `main (the current
+  source)` as a target, so a machine with no network can still build, and the note says
+  why GitHub gave nothing (`tests/test_build_api.py`, `tests/test_build_tab_releases.js`).
 - **A harness for the end-of-turn check**: `tools/turn_tail_measure.py` runs one multi-part
   prompt twice, once against the server you already have running and once against a second
   server started in attach mode against that same model with `--turn-tail-check` on, so no

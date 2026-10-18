@@ -11,7 +11,9 @@ import json
 import re
 import unittest
 from pathlib import Path
+from typing import Any, ClassVar
 
+from serve import build_api
 from serve.build_api import BuildJob
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +90,62 @@ class BuildLogTests(unittest.TestCase):
     def test_an_offset_past_the_end_returns_nothing(self) -> None:
         self.job.log_line("one")
         self.assertEqual(self.job.tail(10_000)["lines"], [])
+
+
+class StatusTests(unittest.TestCase):
+    """GET /build/status is the payload the Build tab's dropdown is built from.
+
+    The tab reads latest.releases, so that key has to be the list. It used to be the
+    single newest release, which is why the box stayed empty.
+    """
+
+    RELEASES: ClassVar[list[dict[str, Any]]] = [
+        {"tag": "v0.1.45", "version": "0.1.45", "published": "2026-10-01T00:00:00Z", "assets": []},
+        {"tag": "v0.1.44", "version": "0.1.44", "published": "2026-09-01T00:00:00Z", "assets": []},
+    ]
+
+    def setUp(self) -> None:
+        self.original = build_api.latest_release
+        build_api.latest_release = lambda: {"repo": "Niko1221/Strata", "releases": list(self.RELEASES)}
+        self.tmp = Path(__import__("tempfile").mkdtemp())
+        build_api.ENGINE_DIR = self.tmp / "engine"
+        build_api.MANIFEST = self.tmp / "build_options.json"
+        build_api.ENGINE_DIR.mkdir()
+        (build_api.ENGINE_DIR / "BUILD.json").write_text(json.dumps({"version": "0.1.44"}), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        build_api.latest_release = self.original
+        build_api.ENGINE_DIR = ROOT / "engine"
+        build_api.MANIFEST = ROOT / "config" / "build_options.json"
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_listing_is_under_latest(self) -> None:
+        payload = build_api.build_status()
+        self.assertIsInstance(payload["latest"].get("releases"), list)
+        self.assertEqual([r["tag"] for r in payload["latest"]["releases"]], ["v0.1.45", "v0.1.44"])
+        self.assertEqual(payload["newest"]["tag"], "v0.1.45")
+        self.assertTrue(payload["update_available"], "0.1.44 installed, 0.1.45 published")
+        self.assertTrue(payload["installed"]["worker"] is False)
+
+    def test_no_update_when_the_installed_engine_is_the_newest(self) -> None:
+        (build_api.ENGINE_DIR / "BUILD.json").write_text(json.dumps({"version": "0.1.45"}), encoding="utf-8")
+        payload = build_api.build_status()
+        self.assertFalse(payload["update_available"])
+        self.assertEqual(len(payload["latest"]["releases"]), 2)
+
+    def test_github_unreachable_still_returns_a_usable_payload(self) -> None:
+        build_api.latest_release = lambda: {"error": "timed out", "releases": []}
+        payload = build_api.build_status()
+        self.assertIsNone(payload["newest"])
+        self.assertFalse(payload["update_available"])
+        self.assertEqual(payload["latest"]["releases"], [])
+        self.assertEqual(payload["latest"]["error"], "timed out")
+
+    def test_an_engine_with_no_version_is_never_told_it_is_up_to_date(self) -> None:
+        build_api.ENGINE_DIR.mkdir(exist_ok=True)
+        (build_api.ENGINE_DIR / "BUILD.json").write_text(json.dumps({"version": None}), encoding="utf-8")
+        self.assertFalse(build_api.build_status()["update_available"])
 
 
 class ScratchContractTests(unittest.TestCase):

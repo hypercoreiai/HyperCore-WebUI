@@ -257,7 +257,10 @@ The retry then holds off for as long as that sweep runs.
 
 1. Reads the installed version from `engine/BUILD.json`, or from the
    `engine=X.Y.Z` string compiled into the binary.
-2. Queries the GitHub releases API for `Niko1221/Strata`.
+2. Queries the GitHub releases API for `Niko1221/Strata`. The dropdown lists those
+   releases with `main (the current source)` at the end: `main` is what
+   `tools/build_engine.sh` builds when no tag is given, so the box is never empty,
+   even with no network.
 3. Either downloads the ready-made archive for this OS and verifies its published
    SHA-256, or shallow-clones the release into `tmp/`, builds it, and copies the
    binaries into `engine/`. One cmake invocation builds all three targets

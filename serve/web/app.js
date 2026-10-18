@@ -2526,14 +2526,27 @@ function loadBuild() {
     $("build-installed").innerHTML = `<dt>Engine</dt><dd>${esc(inst.version || "none installed")}</dd>` +
       `<dt>Source</dt><dd>${esc(inst.source || "-")}</dd>` +
       `<dt>Worker</dt><dd>${inst.worker ? "built" : "not built (engine runs in direct mode)"}</dd>`;
+    // s.latest is the listing ({repo, releases, checked_at} or {error, releases: []});
+    // s.newest is the single release the update note points at.
     const releases = (s.latest && s.latest.releases) || [];
-    $("build-tag").innerHTML = releases.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)}</option>`).join("");
-    $("build-update-note").textContent = s.update_available
-      ? `Update available: ${inst.version} -> ${releases[0].version}`
-      : "The engine is the latest release.";
+    // main is always a valid build target (tools/build_engine.sh defaults to it), so the
+    // box is never empty - a machine with no network can still build from source.
+    $("build-tag").innerHTML = releases.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)}</option>`).join("") +
+      `<option value="main">main (the current source)</option>`;
+    if (!releases.length) {
+      const why = s.latest && s.latest.error ? String(s.latest.error).split("\n")[0] : "no published releases";
+      $("build-update-note").textContent = `GitHub gave no releases (${why}). main can still be built from source.`;
+    } else {
+      $("build-update-note").textContent = s.update_available
+        ? `Update available: ${inst.version} -> ${s.newest.version}`
+        : `The engine is the latest release (${inst.version}).`;
+    }
     renderBuildOptions(s.options);
     renderBuildLog(s.job);
-  }).catch(() => { $("build-update-note").textContent = "could not reach GitHub"; });
+  }).catch((e) => {
+    $("build-tag").innerHTML = `<option value="main">main (the current source)</option>`;
+    $("build-update-note").textContent = `could not read the build status: ${String(e.message || e)}`;
+  });
 }
 
 function renderBuildOptions(options) {

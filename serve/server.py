@@ -3827,19 +3827,10 @@ def make_handler(svc: Service):
                     self._json(200, agent_prompts.catalog(svc.prompts_path))
                 return
             if path == "/build/status":
-                # what engine is installed, what the latest release is, and whether they differ
+                # what engine is installed, which releases this machine can install, and
+                # whether one of them is newer (serve/build_api.py:build_status)
                 if self._authorized():
-                    installed = build_api.installed_version()
-                    releases = build_api.latest_release()
-                    newest = (releases.get("releases") or [None])[0]
-                    self._json(200, {
-                        "installed": installed,
-                        "latest": newest,
-                        "update_available": bool(newest and newest.get("version") != installed.get("version")),
-                        "options": json.loads(build_api.MANIFEST.read_text(encoding="utf-8"))
-                        if build_api.MANIFEST.is_file() else None,
-                        "job": build_api.JOB.status(),
-                    })
+                    self._json(200, build_api.build_status())
                 return
             if path == "/tune/status":
                 if self._authorized():
