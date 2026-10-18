@@ -105,7 +105,13 @@ HYPERCORE_API hypercore_status_t hypercore_engine_init(hypercore_engine_t** out_
     }
     if (exe.empty()) return HYPERCORE_STATUS_INVALID_ARG;
 
-    std::vector<std::string> args = json_string_array(json, "args");
+    /* The same aliasing as the executable above: the server's worker config writes
+       engine_args, a run config written by setup.py writes args. Reading only one of the
+       two gives an empty argv, and the engine then fails at its own argument check rather
+       than at a missing model path - which is why an engine that was handed nothing reads
+       as a memory problem. */
+    std::vector<std::string> args = json_string_array(json, "engine_args");
+    if (args.empty()) args = json_string_array(json, "args");
     args.push_back("--serve");
 
     double startup_s = 300.0;

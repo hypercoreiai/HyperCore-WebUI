@@ -229,6 +229,19 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   function `serve/build_api.py:build_status`. The dropdown also carries `main (the current
   source)` as a target, so a machine with no network can still build, and the note says
   why GitHub gave nothing (`tests/test_build_api.py`, `tests/test_build_tab_releases.js`).
+- **The worker started the engine with no model.** `serve/server.py:hypercore_worker_config`
+  writes the worker config with `engine_exe` and `engine_args`; the reader in
+  `engine-src/interface/strata_bridge.cpp` took the executable under both spellings but the
+  arguments under only one. A run config handed to the worker as a file still worked, and the
+  same config handed to it inline - which is how the server always passes it - read as an empty
+  argument list, so the engine started with nothing and refused at its own argument check. The
+  memory guard prints before that check, so the failure read as an out-of-memory problem:
+
+      strata generate: memory guard: limit 30.5 GiB ...
+      strata generate: --ple-gguf is required; --no-ple explicitly enables a diagnostic ablation
+
+  The reader now takes either spelling, as the executable already did
+  (`tests/test_worker_config_keys.py`).
 - **A harness for the end-of-turn check**: `tools/turn_tail_measure.py` runs one multi-part
   prompt twice, once against the server you already have running and once against a second
   server started in attach mode against that same model with `--turn-tail-check` on, so no
