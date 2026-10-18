@@ -168,6 +168,11 @@ Point the app at an engine and a model in `config/run-<model>.json`, or set them
 in the Config view. `config/run-example.json` is the template; copy it and fill in
 the paths. The defaults are host `0.0.0.0`, port `8081`, API key `0000`.
 
+A fresh clone has neither yet, and that does not stop it starting: `./run.sh` brings the
+app up with no engine so the Build tab can be used. The first build installs
+`engine/engine_<quant>/` and `config/run-<quant>.json` under this root, and the Model
+dropdown at the top of the page lists that version from then on.
+
 The engine is found in this order: `--engine`, the run config's `"engine_url"`,
 `--engine-url` / `$HYPERCORE_ENGINE_URL`, the run config's `"exe"`,
 `engine/strata`, then `STRATA_ENGINE`.

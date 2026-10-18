@@ -21,6 +21,13 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   engine argument names is checked before the process is spawned, and an engine that
   exits is reported in its own words - a missing model shard is called a missing
   model shard, not a memory problem.
+- **A fresh clone starts the app**: with nothing installed yet `run.sh` and `run.bat`
+  do not exit, they serve the page with no engine. The Build tab is what produces the
+  first engine and the first run config, so a page that never starts cannot build one.
+  An engine that is present is still started, a real run config is still used, and
+  `--ui-only` on the command line is forwarded once rather than twice.
+  `tests/test_run_scripts.py` runs `run.sh` against a stub server in all four cases and
+  checks the same branch exists on both platforms.
 - **Build tab**: version check against the Niko1221/Strata releases, ready-made
   download with SHA-256 verification, or a from-source build whose dropdowns are
   extracted from that release's own `CMakeLists.txt` and `setup.py` and diffed

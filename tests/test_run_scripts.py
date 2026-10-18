@@ -8,6 +8,9 @@ the same build targets and the same fallback.
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -44,6 +47,21 @@ class EntryPointTests(unittest.TestCase):
         self.assertIn("engine/hypercore-worker", sh)
         self.assertIn("engine\\hypercore-worker.exe", bat)
 
+    def test_a_fresh_clone_starts_the_app_on_both_platforms(self) -> None:
+        """Nothing installed yet is a state to serve, not a reason to refuse.
+
+        The Build tab is what produces the first engine and the first run config, so
+        the entry point brings the page up with no engine instead of exiting; the same
+        branch has to exist on both sides.
+        """
+        sh, bat = read("run.sh"), read("run.bat")
+        for name in (sh, bat):
+            self.assertIn("so the Build tab is reachable", name,
+                          "the engineless start is not in the entry point")
+            self.assertIn("ENGINELESS", name, "the entry point has no engineless branch")
+            self.assertIn("--ui-only", name)
+        self.assertNotIn("exit 1", sh, "run.sh must not refuse to start a fresh clone")
+
 
 class BuildScriptTests(unittest.TestCase):
     def test_both_build_scripts_inject_the_interface_before_cmake(self) -> None:
@@ -72,6 +90,65 @@ class BuildScriptTests(unittest.TestCase):
         sh, bat = read("tools/build_engine.sh"), read("tools/build_engine.bat")
         self.assertIn('rm -rf "$CLONE"', sh)
         self.assertIn("rmdir /s /q tmp\\strata-%TAG%", bat)
+
+
+class FreshCloneStartTests(unittest.TestCase):
+    """run.sh against a clone with nothing in it, run for real.
+
+    A stub interpreter stands in for the server: it records the arguments run.sh built
+    and answers the port check with 'not running', so the test sees the entry point's
+    decisions rather than a live server.
+    """
+
+    def scratch(self) -> Path:
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        for folder in ("config", "engine", "tools"):
+            (d / folder).mkdir()
+        shutil.copyfile(ROOT / "run.sh", d / "run.sh")
+        stub = d / ".venv" / "bin" / "python"      # run.sh prefers this interpreter
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text('#!/bin/sh\n'
+                        'if [ "$1" = "tools/is_running.py" ]; then exit 1; fi\n'
+                        'echo "server: $*"\n', encoding="utf-8")
+        stub.chmod(0o755)
+        return d
+
+    def server_call(self, d: Path, *args: str) -> tuple[int, str, str]:
+        proc = subprocess.run(["sh", str(d / "run.sh"), *args], capture_output=True,
+                              text=True, cwd=d, timeout=20, check=False)
+        line = next((l for l in proc.stdout.splitlines() if l.startswith("server:")), "")
+        return proc.returncode, line, proc.stdout
+
+    def test_nothing_installed_still_starts_the_app(self) -> None:
+        d = self.scratch()
+        code, call, out = self.server_call(d)
+        self.assertEqual(code, 0, f"run.sh refused to start: {out}")
+        self.assertIn("--ui-only", call, "the fresh clone was not started engineless")
+        self.assertIn("Build tab", out)
+        self.assertNotIn("--engine", call, "an engine was named that is not on disk")
+
+    def test_the_engineless_flag_is_passed_once_when_asked_for(self) -> None:
+        d = self.scratch()
+        code, call, out = self.server_call(d, "--ui-only")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(call.count("--ui-only"), 1, f"duplicated flag: {call}")
+
+    def test_an_engine_that_is_there_is_started_and_not_skipped(self) -> None:
+        d = self.scratch()
+        (d / "engine" / "strata").write_text("stub", encoding="utf-8")
+        code, call, out = self.server_call(d)
+        self.assertEqual(code, 0, out)
+        self.assertIn("--engine strata", call)
+        self.assertNotIn("--ui-only", call, "a present engine should not be skipped")
+
+    def test_a_real_config_is_still_used(self) -> None:
+        d = self.scratch()
+        (d / "config" / "run-q2_0.json").write_text('{"model_name": "stub"}', encoding="utf-8")
+        code, call, out = self.server_call(d)
+        self.assertEqual(code, 0, out)
+        self.assertIn("--config config/run-q2_0.json", call)
+        self.assertNotIn("--ui-only", call)
 
 
 class ScratchIsolationTests(unittest.TestCase):
