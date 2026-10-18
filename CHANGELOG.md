@@ -57,6 +57,16 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   /history/distil` reports the state, `POST /history/distil` runs one now,
   `HYPERCORE_AUTO_DISTIL=0` turns the automatic pass off and `HYPERCORE_DISTIL_SCRIPT`
   points the hook at a builder kept elsewhere.
+- **The banner's red button stops the engine, not the app.** It reads "Stop Engine", arms
+  on the first click ("Confirm") and stops the model, the image encoder and the MCP
+  servers on the second (`POST /v1/stop`, the engine-only pair that already existed for
+  the API and the Monitor). The port stays bound, every tab keeps working, and the same
+  button turns into "Start Engine" (`POST /v1/start`) so the model comes back without
+  restarting anything. `/health` now reports `engine.stopped` so the page does not paint
+  a Stop label over an engine that is already down, and the offline banner's Load button
+  starts a stopped engine rather than trying to load into a process that is gone.
+  Closing the whole server moved to the Monitor tab under Model state, "Close this
+  server", which is the same path Ctrl+C and SIGTERM take.
 - **Monitor history card**: the Monitor tab shows what is in the archive (transcripts, chat
   summaries, topic files, notes, the newest transcript, the last rebuild and its duration)
   and has a "Rebuild now" button that runs the builder on request. The card is hidden until
@@ -68,6 +78,13 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   several models can turn it off once instead of in every config. The decision is a single
   function, `serve/server.py:resolve_turn_tail`, and the server says out loud when the switch
   overrode a request (`tests/test_turn_tail_check.py`).
+- **A harness for the end-of-turn check**: `tools/turn_tail_measure.py` runs one multi-part
+  prompt twice, once against the server you already have running and once against a second
+  server started in attach mode against that same model with `--turn-tail-check` on, so no
+  second copy of a tens-of-GB model is loaded. It counts the `tail_check` events the stream
+  actually emitted, the characters the answer grew by, and how many of the parts the prompt
+  named were covered. `--self` runs the whole comparison against two mock engines, which is
+  the GPU-free way to prove the wiring (`tests/test_turn_tail_measure.py`).
 - **History builder, two determinism fixes**: `~34%` is an approximation, not a home path, so it
   is no longer rewritten to `/home/ai-user0/34%`; and a figure a chat took from an outside source
   is filed under "From outside this project" rather than "Measured on this machine", so the agent

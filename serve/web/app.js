@@ -199,53 +199,132 @@ $("s-surface").value = savedSurface;
 applySurface(savedSurface);
 
 
-// ------------------------------------------------------------------ shut down
-// The red button in the banner. Two clicks on purpose: the first arms it, the second
-// stops the server, so a stray click cannot end a model that is mid-request.
-// POST /v1/shutdown only asks; main() then runs the same closers Ctrl+C and SIGTERM
-// run, so the engine is told to free its memory before anything is killed. That path is
-// plain Python - no signals, no process scanning - so it behaves the same on Windows.
-// POST /v1/stop and POST /v1/start (the engine only, the server stays up) still exist for
-// the API and the Monitor; this button does not use them.
+// ------------------------------------------------------------------ the engine
+// The red button in the banner stops the engine, not the app. The port stays bound, every
+// tab keeps working, and the button turns into "Start Engine" so the model comes back
+// without restarting anything. Stopping takes two clicks so a stray click cannot end a
+// model that is mid-request.
+// POST /v1/stop and POST /v1/start are the engine-only pair. POST /v1/shutdown closes the
+// whole server, which is what Ctrl+C and SIGTERM do; that one is on the Monitor tab under
+// Model state, so closing the app is still one click from the page.
 const RESUME_PROMPT = "Complete the open tasks";   // what the composer's Start button asks for
-let shuttingDown = false, armed = false;
-const SHUTDOWN_TITLE = "Shut down HyperCore: stop the model, the MCP servers and the image encoder, then close this server";
-function disarmShutdown() {
-  const btn = $("shutdown-btn");
-  armed = false;
-  delete btn.dataset.armed;
-  btn.disabled = false;
-  $("shutdown-text").textContent = "Shut Down";
-  btn.title = SHUTDOWN_TITLE;
+let engineStopped = false;   // the banner's Stop was accepted: the engine is down, the app is not
+let engineArmed = false;     // the first click arms the stop, the second one stops
+let engineBusy = false;      // a stop or a start request is in flight
+let serverClosed = false;    // the Monitor's "Close this server" was pressed
+
+const STOP_TITLE = "Stop the engine: the model, the image encoder and the MCP servers. " +
+                   "This app keeps serving; press it again to bring the model back.";
+const ARM_TITLE = "Click again to stop the engine. The app keeps serving.";
+const START_TITLE = "Start the engine again. The app has kept serving while it was down.";
+
+// The engine is down when this app stopped it, or when /health says it never came up.
+function engineDown() {
+  return engineStopped || Boolean(health.engine && health.engine.state === "offline");
 }
-$("shutdown-btn").onclick = async () => {
+
+function paintEngineButton() {
   const btn = $("shutdown-btn");
-  if (shuttingDown) return;
-  if (!armed) {
-    armed = true;
-    btn.dataset.armed = "1";
-    $("shutdown-text").textContent = "Confirm";
-    btn.title = "Click again to shut down HyperCore";
-    setTimeout(() => { if (!shuttingDown) disarmShutdown(); }, 8000);   // let it go back on its own
+  if (serverClosed) {
+    btn.disabled = true;
+    delete btn.dataset.armed;
+    $("shutdown-text").textContent = "Server closed";
+    btn.title = "This server is closed. Start it again with run.sh.";
     return;
   }
-  shuttingDown = true;
-  delete btn.dataset.armed;
+  btn.disabled = false;
+  if (engineDown()) {
+    delete btn.dataset.armed;
+    $("shutdown-text").textContent = engineBusy ? "Starting..." : "Start Engine";
+    btn.title = START_TITLE;
+    btn.setAttribute("aria-label", "Start the engine");
+    return;
+  }
+  $("shutdown-text").textContent = engineArmed ? "Confirm" : "Stop Engine";
+  btn.title = engineArmed ? ARM_TITLE : STOP_TITLE;
+  btn.setAttribute("aria-label", "Stop the engine");
+  if (engineArmed) btn.dataset.armed = "1"; else delete btn.dataset.armed;
+}
+
+function disarmEngineButton() {
+  engineArmed = false;
+  paintEngineButton();
+}
+
+$("shutdown-btn").onclick = async () => {
+  const btn = $("shutdown-btn");
+  if (serverClosed || engineBusy) return;
+  if (!engineDown()) {
+    if (!engineArmed) {
+      engineArmed = true;
+      paintEngineButton();
+      setTimeout(() => { if (!engineBusy) disarmEngineButton(); }, 8000);   // let it go back on its own
+      return;
+    }
+    engineBusy = true;
+    delete btn.dataset.armed;
+    $("shutdown-text").textContent = "Stopping...";
+    setPill("idle", "Stopping the engine");
+    try {
+      const r = await fetch("v1/stop", { method: "POST", headers: headers(true), body: "{}" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error?.message || `HTTP ${r.status}`);
+      engineStopped = true;
+      engineArmed = false;
+      toast("success", "Engine stopped",
+           "Stopped " + (body.stopped || []).join(", ") + ". The app is still serving; " +
+           "Start Engine brings the model back.", 8000);
+      setPill("idle", "Engine stopped");
+      await loadHealth();
+    } catch (e) {
+      engineBusy = false;
+      disarmEngineButton();
+      toast("error", "Could not stop the engine", String(e.message || e));
+      return;
+    }
+    engineBusy = false;
+    paintEngineButton();
+    return;
+  }
+  engineBusy = true;
+  $("shutdown-text").textContent = "Starting...";
+  setPill("idle", "Starting the engine");
+  try {
+    const r = await fetch("v1/start", { method: "POST", headers: headers(true), body: "{}" });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error?.message || `HTTP ${r.status}`);
+    engineStopped = false;
+    toast("success", "Engine starting", "The model loads in a minute or two; the chat works when it is ready.", 8000);
+    setPill("idle", "Idle");
+    await loadHealth();
+  } catch (e) {
+    toast("error", "The engine did not come back", String(e.message || e), 8000);
+    setPill("error", "Engine not running");
+  } finally {
+    engineBusy = false;
+    paintEngineButton();
+  }
+};
+
+// Closing the whole server is the Monitor tab's job; the banner button is about the engine.
+$("close-server-btn").onclick = async () => {
+  const btn = $("close-server-btn");
   btn.disabled = true;
-  $("shutdown-text").textContent = "Shutting down";
   setPill("idle", "Shutting down");
   try {
     const r = await fetch("v1/shutdown", { method: "POST", headers: headers(true), body: "{}" });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(body.error?.message || `HTTP ${r.status}`);
-    toast("success", "Shutting down", "Closing " + (body.closing || []).join(", ") + ".", 6000);
+    serverClosed = true;
+    toast("success", "Shutting down", "Closing " + (body.closing || []).join(", ") +
+          ". Start it again with run.sh.", 6000);
     setPill("idle", "Stopped");
     document.querySelectorAll(".st-tab, .st-composer .st-btn").forEach(b => b.disabled = true);
     $("input").disabled = true;
+    paintEngineButton();
   } catch (e) {
-    shuttingDown = false;
-    disarmShutdown();
-    toast("error", "Could not shut down", String(e.message || e));
+    btn.disabled = false;
+    toast("error", "Could not close the server", String(e.message || e));
   }
 };
 let tab = "chat";
@@ -310,9 +389,11 @@ function renderEngineState() {
   $("engine-offline-why").textContent = `${why}${next}`;
   // the engine's own error, in full, for anyone who wants to see why
   $("engine-offline-why").title = state.detail || retry.detail || why;
-  $("engine-load-btn").textContent = retry.paused ? "Try anyway"
+  $("engine-load-btn").textContent = state.stopped ? "Start the engine"
+                                : retry.paused ? "Try anyway"
                                 : retry.state === "retrying" ? "Try now" : "Load it";
   $("chat-empty-sub").textContent = "The model is not loaded on this PC. The tabs below still work.";
+  paintEngineButton();
 }
 
 async function loadHealth() {
@@ -331,10 +412,13 @@ async function loadHealth() {
 
 $("engine-load-btn").onclick = async () => {
   const btn = $("engine-load-btn");
+  // A stop from the banner is not an unload: /v1/load refuses while the engine is stopped
+  // (ensure_loaded raises EngineStopped), so bring the process back with /v1/start.
+  const endpoint = (health.engine || {}).stopped ? "v1/start" : "v1/load";
   btn.disabled = true;
   btn.textContent = "Loading...";
   try {
-    const res = await fetch("v1/load", {method: "POST", headers: headers(true), body: "{}"});
+    const res = await fetch(endpoint, {method: "POST", headers: headers(true), body: "{}"});
     const out = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error((out.error && out.error.message) || `the server said ${res.status}`);
@@ -411,7 +495,7 @@ async function poll() {
     if (++metricsFailures === 3) setPill("error", "Server not reachable");
   }
   if (tab === "monitor" && ++mcpTick % 10 === 0) { loadMcp(); loadAssistMonitor(); loadHistory(); }       // server states change rarely: every 10 s
-  if (!shuttingDown) setTimeout(poll, 1000);   // after Shut Down the server is gone: stop asking it
+  if (!serverClosed) setTimeout(poll, 1000);   // after Close this server the port is gone: stop asking it
 }
 
 function setPill(state, text) {

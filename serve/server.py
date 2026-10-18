@@ -3872,6 +3872,13 @@ def make_handler(svc: Service):
             elif path in ("/health", "/api/health"):
                 engine_state = (svc.engine.status() if isinstance(svc.engine, OfflineEngine)
                                 else {"state": "running"})
+                # A Stop from the app leaves the engine object in place with no process
+                # behind it, so "running" would be a lie: the page would paint a Stop
+                # button over an engine that is already down.
+                if getattr(svc, "engine_stopped", False):
+                    engine_state["state"] = "offline"
+                    engine_state["stopped"] = True
+                    engine_state.setdefault("reason", "the engine was stopped from this app")
                 if svc.engine_retry:
                     engine_state["retry"] = svc.engine_retry.status()
                 self._json(200, {"status": "ok", "max_context": svc.engine.max_context, "model": svc.model,

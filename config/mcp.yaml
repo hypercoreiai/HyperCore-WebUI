@@ -34,11 +34,11 @@
 timeout_s: 90
 max_result_chars: 6000
 max_rounds: 500
-max_tool_calls: 500
+max_tool_calls: 200
 start_timeout_s: 30
 condense_at: 0.75
-condense_after: 2
-condense_chars: 1200
+condense_after: 4
+condense_chars: 2400
 compact_at: 0.90
 compact_retain_bytes: 80000
 

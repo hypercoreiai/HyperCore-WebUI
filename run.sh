@@ -5,6 +5,7 @@
 #   ./run.sh q2_0           config/run-q2_0.json, config/q2_0.json, or any name
 #   ./run.sh config/x.json  a path, verbatim
 #   ./run.sh --no-attach    flags after the name are passed to the server as they are
+#   ./run.sh --ui-only      the app without an engine: usable while the GPU is busy
 #
 # One engine per machine. Two things follow from that:
 #

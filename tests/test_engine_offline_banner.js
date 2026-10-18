@@ -55,16 +55,27 @@ check(SERVER.includes("HYPERCORE_HOLD_THE_CARD"),
 
 // ---- 3. run the renderer against a stub DOM -----------------------------------
 const renderFn = slice(APP, "function renderEngineState() {", "\n}", "renderEngineState");
+// The banner renderer and the header button are one state machine: the banner paints the
+// header's Stop/Start label too, so both are run together here.
+const engineBlock = slice(APP, "const RESUME_PROMPT", "$(\"close-server-btn\")",
+                          "the banner's engine block");
+const makeEl = () => ({hidden: false, disabled: false, dataset: {}, title: "", textContent: "",
+                       attrs: {}, setAttribute(k, v) { this.attrs[k] = v; },
+                       getAttribute(k) { return this.attrs[k]; }});
 const els = {
-  "engine-offline": {hidden: true},
-  "engine-offline-title": {textContent: ""},
-  "engine-offline-why": {textContent: ""},
-  "engine-load-btn": {textContent: "", disabled: false},
-  "chat-empty-sub": {textContent: ""},
+  "engine-offline": Object.assign(makeEl(), {hidden: true}),
+  "engine-offline-title": makeEl(),
+  "engine-offline-why": makeEl(),
+  "engine-load-btn": Object.assign(makeEl(), {disabled: false}),
+  "chat-empty-sub": makeEl(),
+  "shutdown-btn": Object.assign(makeEl(), {disabled: false}),
+  "shutdown-text": makeEl(),
 };
 const $ = (id) => els[id];
-const run = new Function("$", "health", renderFn + "\nreturn renderEngineState;");
-const render = (health) => run($, health)();
+const run = new Function("$", "health", "setPill", "toast", "fetch", "headers", "document",
+                         engineBlock + "\n" + renderFn + "\nreturn renderEngineState;");
+const render = (health) => run($, health, () => {}, () => {}, async () => ({ok: true, json: async () => ({})}), () => ({}),
+                               {querySelectorAll: () => []})();
 
 render({model: "fake-model", engine: {state: "running"}});
 check(els["engine-offline"].hidden === true, "the banner shows when an engine is running");
@@ -98,6 +109,24 @@ check(els["engine-load-btn"].textContent === "Try anyway",
 
 render({model: "fake-model"});
 check(els["engine-offline"].hidden === true, "a health response with no engine state shows the banner");
+
+// ---- 4. the header button follows the same state ----------------------------
+render({model: "fake-model", engine: {state: "running"}});
+check("the header offers Stop Engine while an engine is running",
+      els["shutdown-text"].textContent === "Stop Engine",
+      `got ${els["shutdown-text"].textContent}`);
+check("the header says the app keeps serving",
+      /This app keeps serving/.test(els["shutdown-btn"].title));
+render({model: "fake-model", engine: {state: "offline", stopped: true,
+                                      reason: "the engine was stopped from this app"}});
+check("a stop from the app turns the header into Start Engine",
+      els["shutdown-text"].textContent === "Start Engine",
+      `got ${els["shutdown-text"].textContent}`);
+check("the header calls it a stop, not a crash",
+      /stopped from this app/.test(els["engine-offline-why"].textContent));
+check("the banner's own button starts a stopped engine",
+      els["engine-load-btn"].textContent === "Start the engine",
+      `got ${els["engine-load-btn"].textContent}`);
 
 if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }
 console.log("ok: the engine banner is wired to /health");

@@ -36,9 +36,9 @@
   <span class="st-header__spacer"></span>
   <span class="st-pill" id="pill" data-state="idle" role="status" aria-live="polite">
     <span class="st-pill__dot"></span><span id="pill-text">Connecting&hellip;</span></span>
-  <button class="st-btn st-btn--danger" id="shutdown-btn" title="Shut down HyperCore: stop the model, the MCP servers and the image encoder, then close this server"
-          aria-label="Shut down HyperCore">
-    <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-power"/></svg><span id="shutdown-text">Shut Down</span></button>
+  <button class="st-btn st-btn--danger" id="shutdown-btn" title="Stop the engine: the model, the image encoder and the MCP servers. This app keeps serving; press it again to bring the model back."
+          aria-label="Stop the engine">
+    <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-power"/></svg><span id="shutdown-text">Stop Engine</span></button>
   <button class="st-btn st-btn--icon" id="theme-btn" title="Light / dark" aria-label="Switch between light and dark">
     <svg class="st-icon"><use id="theme-icon" href="web/sprite.svg#i-moon"/></svg></button>
 </header>
@@ -110,6 +110,11 @@
         </div>
         <div class="state-card__row"><span id="state-label">Waiting for a request</span><span class="muted" id="state-detail"></span></div>
         <div class="st-progress" id="state-progress"><div class="st-progress__bar" id="state-bar" style="width:0%"></div></div>
+        <div class="state-card__controls">
+          <button type="button" class="st-btn st-btn--secondary" id="close-server-btn"
+                  title="Close this server: the engine, the MCP servers and the port. Start it again with run.sh.">
+            <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-power"/></svg><span>Close this server</span></button>
+        </div>
       </div>
 
       <div class="metrics" id="metrics">

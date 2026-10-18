@@ -335,6 +335,25 @@ HYPERCORE_NO_TURN_TAIL_CHECK=1 ./run.sh
 The server prints that the request was overridden, and `GET /v1/status` reports
 `"turn_tail": {"enabled": false}`.
 
+### Measuring whether it helps
+
+`tools/turn_tail_measure.py` runs the same prompt against the server you already have running
+(check off) and against a second server it starts in attach mode against that same model
+(check on), then prints the number of tail checks that ran, the characters the answer grew by,
+and how many of the parts the prompt named were covered:
+
+```bash
+python3 tools/turn_tail_measure.py --self                                   # mock pair, no GPU
+python3 tools/turn_tail_measure.py --base http://127.0.0.1:8081 --key 0000
+python3 tools/turn_tail_measure.py --prompts my_prompts.json --runs 3 --json
+```
+
+A prompt file is a JSON list of `{"name", "prompt", "must": [...]}`, where `must` is what a
+complete answer has to contain. `--thinking-budget` matters: a turn that runs out of tokens
+while still thinking ends with `finish_reason: length` and is never tail-checked, so a thinking
+model needs a budget for the comparison to mean anything. `--self` proves the wiring against a
+mock script; its numbers say nothing about a real model.
+
 ## Layout
 
 ```
