@@ -63,8 +63,8 @@ from serve import (
 from serve import prompts as agent_prompts
 from serve import responses as responses_api
 from serve import build_api, chat_archive, quant_store, strata_hook, tune_api
-from serve.offline_engine import (DEFAULT_RETRY_S, EngineRetry, EngineUnavailable, OfflineEngine,
-                                 UNLOADED_CODE)
+from serve.offline_engine import (DEFAULT_RETRY_S, DeferredEngine, EngineRetry, EngineUnavailable,
+                                 OfflineEngine, UNLOADED_CODE)
 from serve.frontend import (
     ChatTemplate,
     Event,
@@ -5527,6 +5527,55 @@ def resolve_turn_tail(cli_flag: bool, cfg: dict, env: dict[str, str] | None = No
     return bool(cli_flag or cfg.get("turn_tail_check") is True)
 
 
+def engine_from_active_config() -> Any | None:
+    """The engine the active run config names now, or None while nothing is there.
+
+    A server started engineless reads the run config once, at startup, and never again: a
+    build that installs an engine is not seen, and the app stays engineless until it is
+    started again. This is the same read at attempt time, so a build is adopted without
+    taking the web app down - the Build tab puts the engine in engine/engine_<quant>/,
+    writes config/run-<quant>.json, and activates it.
+
+    The worker is HyperCore's process boundary, so a config whose worker exists is built
+    the way the startup path builds it; otherwise the engine is run directly. Returns None
+    while there is no run config or no engine binary - that is not an error, it is the
+    state before the first build.
+    """
+    configs = quant_store._run_configs()
+    if not configs:
+        return None
+    active = quant_store.index().get("active")
+    chosen = next((c for c in configs if c["quant"] == active), configs[0])
+    try:
+        raw = Path(chosen["path"]).read_text(encoding="utf-8-sig")
+        run_cfg = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    exe = engine_binary(run_cfg)
+    if not exe:
+        return None
+    worker = run_cfg.get("worker") or worker_binary_path()
+    if not Path(worker).is_absolute():
+        worker = str(Path(run_cfg.get("cwd") or ".").resolve() / worker)
+    if Path(worker).is_file():
+        try:
+            return HyperCoreProcessSupervisor(
+                worker_binary=worker,
+                socket_path=unique_socket_path("hypercore-worker"),
+                config=hypercore_worker_config(run_cfg, raw),
+                stderr_log=run_cfg.get("log"),
+                startup_timeout_s=model_startup_s(run_cfg),
+                silence_s=engine_silence_s(run_cfg),
+                env=run_cfg.get("env") or {},
+            )
+        except (ValueError, OSError):
+            return None
+    from serve.direct_engine import DirectEngine      # imported here, as the other build paths do
+    return DirectEngine(exe, run_cfg.get("args") or [],
+                        startup_timeout_s=model_startup_s(run_cfg),
+                        env=child_env(run_cfg), log_path=run_cfg.get("log"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--engine", choices=["mock", "hypercore", "strata", "attach"], default="mock",
@@ -5652,9 +5701,11 @@ def main() -> int:
         vision = None
         sampling_defaults = sampling_defaults_from_config(cfg)
         effort_end = None
-        engine = OfflineEngine("started with --ui-only: no engine was asked for",
-                              model=cfg.get("model_name") or "no model loaded")
-        engine_unavailable = engine.reason
+
+        engine = DeferredEngine(engine_from_active_config,
+                               "started with --ui-only: no engine was asked for",
+                               model=cfg.get("model_name") or "no model loaded")
+        engine_candidate, engine_unavailable = engine, engine.reason
         print("[hypercore] the web app is up without an engine: the Chat, Monitor, Tune, "
               "Build and About tabs work. A chat request is answered 503 until an engine is "
               "loaded (POST /v1/load, or the Load button in the Chat tab).", flush=True)

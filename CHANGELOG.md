@@ -202,6 +202,17 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   /history/distil` reports the state, `POST /history/distil` runs one now,
   `HYPERCORE_AUTO_DISTIL=0` turns the automatic pass off and `HYPERCORE_DISTIL_SCRIPT`
   points the hook at a builder kept elsewhere.
+- **An engineless server takes the engine a build produces.** `--ui-only` used to refuse
+  forever: the run config was read once at startup, so an engine installed afterwards was
+  never seen and the WebUI had to be started again by hand. `serve/offline_engine.py` now
+  carries `DeferredEngine`, a stand-in that answers like the offline engine until an engine
+  exists and then delegates to it; `serve/server.py`'s `engine_from_active_config()` reads
+  the active run config again on each attempt and builds the worker supervisor (the direct
+  engine when there is no worker) once the binary is there, so `EngineRetry` is given a
+  candidate and the model starts without a restart. The reason string is unchanged, so the
+  banner and `reason_code()` still read `ui_only`. `tests/test_offline_engine.py` has four
+  cases for the delegation, and the before/after behaviour is checked against a fixture
+  root: nothing before a build, the worker supervisor after one.
 - **The banner's red button stops the engine, not the app.** It reads "Stop Engine", arms
   on the first click ("Confirm") and stops the model, the image encoder and the MCP
   servers on the second (`POST /v1/stop`, the engine-only pair that already existed for

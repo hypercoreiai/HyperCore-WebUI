@@ -17,11 +17,12 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serve.offline_engine import EngineRetry, EngineUnavailable, OfflineEngine
+from serve.offline_engine import (DeferredEngine, EngineRetry, EngineUnavailable, OfflineEngine)
 
 FAKE_ENGINE = """#!/bin/sh
 # A stand-in for the Strata engine, speaking the control protocol serve/direct_engine.py
@@ -363,6 +364,85 @@ class ServerEndToEndTests(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=20) as r:
             out = json.loads(r.read())
         self.assertIn("choices", out)
+
+
+class DeferredEngineTests(unittest.TestCase):
+    """An engineless server can still be given an engine: the one a build produces."""
+
+    class Built:
+        """The engine a run config names, once a build has put it in engine/."""
+        def __init__(self) -> None:
+            self.model = "Qwen2-7B-Q2_0"
+            self.max_context = 4096
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def alive(self) -> bool:
+            return self.started
+
+        def generate(self, prompt: str, **kw: Any) -> list[str]:
+            return ["an answer from the built engine"]
+
+        def unload(self) -> bool:
+            return False
+
+        def shutdown(self) -> None:
+            pass
+
+        def status(self) -> dict:
+            return {"state": "ready", "code": "ready", "model": self.model,
+                    "max_context": self.max_context}
+
+    def test_before_the_first_build_it_answers_like_the_offline_engine(self) -> None:
+        deferred = DeferredEngine(lambda: None, "started with --ui-only: no engine was asked for")
+        self.assertEqual(deferred.status()["code"], "ui_only", "the banner changed for a build that is not there")
+        self.assertFalse(deferred.alive())
+        self.assertFalse(deferred.restart())
+        with self.assertRaises(EngineUnavailable):
+            deferred.generate("hello")
+        self.assertIn("nothing has been built yet", deferred.last_error)
+        self.assertIsInstance(deferred, OfflineEngine,
+                             "the server checks for an engine that is not running")
+
+    def test_the_engine_a_build_produces_is_adopted_without_a_restart(self) -> None:
+        built = DeferredEngineTests.Built()
+        deferred = DeferredEngine(lambda: built, "started with --ui-only: no engine was asked for")
+        self.assertFalse(deferred.alive())
+        self.assertTrue(deferred.restart(), "the build's engine was not started")
+        self.assertTrue(deferred.alive())
+        self.assertEqual(deferred.generate("hello"), ["an answer from the built engine"])
+        self.assertEqual(deferred.model, built.model)
+        self.assertEqual(deferred.max_context, 4096)
+        self.assertEqual(deferred.status()["state"], "ready", "the Monitor still reads the stand-in")
+
+    def test_the_retry_adopts_a_build_when_one_appears(self) -> None:
+        built = DeferredEngineTests.Built()
+        seen = [None]
+        def factory():
+            return built            # the second attempt: the build has finished
+        deferred = DeferredEngine(factory, "started with --ui-only: no engine was asked for")
+        retry = EngineRetry(deferred, lambda eng: seen.__setitem__(0, eng), deferred.reason,
+                            interval_s=1)
+        self.assertEqual(deferred.status()["code"], "ui_only", "nothing is built yet, so there is nothing to hand over")
+        snapshot = retry.try_now()
+        self.assertTrue(built.started)
+        self.assertIs(seen[0], deferred, "the retry did not hand the engine to the server")
+        self.assertTrue(deferred.alive())
+        self.assertEqual(deferred.status()["code"], "ready",
+                         "the server now answers for the engine the build produced")
+        self.assertEqual(snapshot["attempts"], 1, "one attempt, and it found the build")
+
+    def test_the_engineless_server_is_given_a_candidate(self) -> None:
+        """Without a candidate the retry is never created, and a build can never be adopted."""
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "serve" / "server.py").read_text(encoding="utf-8")
+        branch = source[source.index("if a.ui_only:"):]
+        self.assertIn("engine_candidate, engine_unavailable = engine, engine.reason", branch,
+                      "an engineless server has no candidate, so a build cannot be adopted")
+        self.assertIn("DeferredEngine(engine_from_active_config", branch,
+                      "the engineless server is not asked to read the run config again")
 
 
 if __name__ == "__main__":

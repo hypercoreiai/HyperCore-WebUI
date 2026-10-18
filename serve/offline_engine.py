@@ -111,6 +111,75 @@ class OfflineEngine:
                 "model": self.model, "retry_after_s": self.retry_after_s}
 
 
+class DeferredEngine(OfflineEngine):
+    """An engine that does not exist yet, and can still be had.
+
+    A server started engineless has no engine to name: at startup nothing is installed,
+    so there is nothing to load, and `OfflineEngine` can only refuse forever. A build
+    changes that - it puts an engine in `engine/engine_<quant>/`, writes the run config
+    that names it, and makes that config the active one. That is the one case where an
+    engine can appear after the server is running, so this is the candidate
+    `EngineRetry` can be given for it: each attempt asks the factory for the engine the
+    run config names now, and once one is there it is started and this object delegates
+    to it.
+
+    It is an `OfflineEngine`, so every check the server makes for "no engine is running"
+    still reads correctly, and the routes that do not need weights keep answering. Only
+    `generate`, `alive`, `restart` and `status` change once a real engine is behind it.
+    The tokenizer and the chat template are the ones the server started with; they are
+    not re-read here.
+    """
+
+    def __init__(self, factory: Callable[[], Any | None], reason: str,
+                 model: str = "no model loaded", retry_after_s: float = DEFAULT_RETRY_S):
+        super().__init__(reason, model=model, retry_after_s=retry_after_s)
+        self.factory = factory
+        self.engine: Any = None
+
+    def build(self) -> Any:
+        """One attempt: take the engine the run config names now, and start it."""
+        if self.engine is None:
+            self.engine = self.factory()
+            if self.engine is None:
+                self.last_error = ("nothing has been built yet: build an engine, or start "
+                                   "this server again with a run config")
+                raise EngineUnavailable(self.last_error, self.retry_after_s)
+        self.engine.start()
+        self.model = getattr(self.engine, "model", self.model) or self.model
+        self.max_context = int(getattr(self.engine, "max_context", 0) or 0)
+        return self.engine
+
+    def start(self) -> None:
+        self.build()
+
+    def alive(self) -> bool:
+        return bool(self.engine and self.engine.alive())
+
+    def restart(self) -> bool:
+        try:
+            engine = self.build()
+        except EngineUnavailable:
+            return False
+        return bool(engine.alive())
+
+    def generate(self, *args: Any, **kwargs: Any) -> Any:
+        if self.engine is None:
+            raise EngineUnavailable(self.reason, self.retry_after_s)
+        return self.engine.generate(*args, **kwargs)
+
+    def unload(self) -> bool:
+        return bool(self.engine and self.engine.unload())
+
+    def shutdown(self) -> None:
+        if self.engine is not None:
+            self.engine.shutdown()
+
+    def status(self) -> dict[str, Any]:
+        if self.engine is not None:
+            return self.engine.status()
+        return super().status()
+
+
 class EngineRetry:
     """Bring an engine back while the UI stays up.
 
