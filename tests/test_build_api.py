@@ -808,5 +808,93 @@ class SelfContainedEngineTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class MergeDataTests(unittest.TestCase):
+    """A completed build merges the clone's data/ into the project's data/, and stores
+    the runtime files it ships for the quant the build was named for."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved = (build_api.ENGINE_DIR, quant_store.ROOT, quant_store.PROJECT_DATA_DIR,
+                      quant_store.TMP_DIR, quant_store.ENGINE_DIR, quant_store.CONFIG_DIR,
+                      quant_store.INDEX_PATH, quant_store.LEGACY_DIR)
+        build_api.ENGINE_DIR = self.tmp / "engine"
+        quant_store.ROOT = self.tmp
+        quant_store.PROJECT_DATA_DIR = self.tmp / "data"
+        quant_store.TMP_DIR = self.tmp / "tmp"
+        quant_store.ENGINE_DIR = build_api.ENGINE_DIR
+        quant_store.CONFIG_DIR = self.tmp / "config"
+        quant_store.LEGACY_DIR = quant_store.ENGINE_DIR / "versions"
+        quant_store.INDEX_PATH = quant_store.ENGINE_DIR / "VERSIONS.json"
+        quant_store.CONFIG_DIR.mkdir(parents=True)
+        (quant_store.PROJECT_DATA_DIR / "media").mkdir(parents=True)
+        self.clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        (self.clone / "data").mkdir(parents=True)
+        (self.clone / "data" / "expert-profile.bin").write_bytes(b"the build's profile")
+        self.job = BuildJob()
+
+    def tearDown(self) -> None:
+        (build_api.ENGINE_DIR, quant_store.ROOT, quant_store.PROJECT_DATA_DIR,
+         quant_store.TMP_DIR, quant_store.ENGINE_DIR, quant_store.CONFIG_DIR,
+         quant_store.INDEX_PATH, quant_store.LEGACY_DIR) = self.saved
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_build_merges_the_clone_data_and_says_so_in_the_log(self) -> None:
+        merged = self.job.merge_clone_data(self.clone)
+        self.assertEqual(merged["added"], ["expert-profile.bin"])
+        merged_file = quant_store.PROJECT_DATA_DIR / "expert-profile.bin"
+        self.assertTrue(merged_file.is_file(), "the build did not merge the runtime file")
+        self.assertEqual(merged_file.read_bytes(), b"the build's profile")
+        self.assertIn("merged data/", "\n".join(self.job.log))
+        # the clone is left in place, so the merged copy is the one that survives
+        self.assertTrue(self.clone.is_dir())
+        self.assertTrue((self.clone / "data" / "expert-profile.bin").is_file())
+
+    def test_a_data_file_the_project_already_has_is_kept_and_reported(self) -> None:
+        (quant_store.PROJECT_DATA_DIR / "expert-profile.bin").write_bytes(b"the app's own")
+        merged = self.job.merge_clone_data(self.clone)
+        self.assertEqual(merged["skipped"], ["expert-profile.bin"])
+        self.assertEqual((quant_store.PROJECT_DATA_DIR / "expert-profile.bin").read_bytes(),
+                         b"the app's own")
+        self.assertIn("kept as they were", "\n".join(self.job.log))
+
+    def test_a_build_that_shipped_no_data_reports_nothing(self) -> None:
+        (self.clone / "data" / "expert-profile.bin").unlink()
+        (self.clone / "data").rmdir()
+        self.assertEqual(self.job.merge_clone_data(self.clone),
+                         {"added": [], "skipped": [], "same": []})
+        self.assertEqual(self.job.log, [], "a build that shipped nothing logged a merge")
+
+    def test_a_build_stores_the_data_for_its_quant_and_points_the_config_at_it(self) -> None:
+        """The Build tab's own path: transfer, then write the run config for the quant."""
+        build_dir = self.clone / "build"      # a build runs inside the clone, and so does its parent
+        build_dir.mkdir()
+        (build_dir / "strata").write_bytes(b"elf")
+        (quant_store.CONFIG_DIR / "run-example.json").write_text(json.dumps({
+            "model_name": "Qwen2-7B-Q2_0", "args": ["--expert-profile",
+                                                  "/ABSOLUTE/PATH/TO/expert-profile.bin"]}),
+            encoding="utf-8")
+        _, key = self.job.transfer_binaries(build_dir, {"version": "0.1.45"}, "q2_0")
+        stored = quant_store.data_dir(key)
+        self.assertTrue((stored / "expert-profile.bin").is_file(),
+                        "the build stored no data for its quant")
+        cfg = json.loads((quant_store.CONFIG_DIR / "run-q2_0.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["args"][1], str(stored / "expert-profile.bin"),
+                         "the run config still names the placeholder")
+        self.assertIn("runtime file(s) from the clone stored", "\n".join(self.job.log))
+
+    def test_the_merge_runs_after_the_build_and_while_the_clone_is_still_there(self) -> None:
+        """The merge reads the clone, so it has to run after the build and before any
+        call that could remove it."""
+        source = (ROOT / "serve" / "build_api.py").read_text(encoding="utf-8")
+        body = source[source.index("def _run("):]
+        self.assertLess(body.index("self.transfer_binaries(build_dir"),
+                        body.index("self.merge_clone_data(clone)"),
+                        "the merge runs before the build has produced anything")
+        self.assertLess(body.index("self.merge_clone_data(clone)"),
+                        body.rindex("self.clean_tmp()"),
+                        "the build merges data/ after the clone is gone")
+
+
 if __name__ == "__main__":
     unittest.main()

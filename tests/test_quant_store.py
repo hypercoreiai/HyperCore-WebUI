@@ -490,6 +490,109 @@ class RunConfigTests(unittest.TestCase):
         shutil.rmtree(clone)
         self.assertTrue(Path(carried).is_file())
 
+    def test_the_whole_data_folder_of_the_build_is_stored_for_its_quant(self) -> None:
+        """A build stores the data folder it ships, not only what the config named.
+
+        The q2_0 case: the config was written from the template and names a placeholder,
+        so nothing was carried and engine/engine_q2_0/ had binaries and no data folder.
+        """
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--expert-profile", "/ABSOLUTE/PATH/TO/expert-profile.bin"]
+        (self.config / "run-q2_0.json").write_text(json.dumps(cfg), encoding="utf-8")
+        for name, content in (("expert-profile.bin", b"profile"),
+                              ("draft_vocab.bin", b"vocab"),
+                              ("experimental-speed-projection/projection.gguf", b"projection")):
+            path = clone / "data" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        path, note = quant_store.ensure_run_config("q2_0", source_root=clone)
+        stored = quant_store.store_dir("q2_0") / "data"
+        self.assertEqual(sorted(p.name for p in stored.rglob("*") if p.is_file()),
+                         ["draft_vocab.bin", "expert-profile.bin", "projection.gguf"],
+                         "the build stored nothing for this quant")
+        self.assertIn("runtime file(s) from the clone stored", note)
+        # and the run config now points at what the build stored
+        self.assertEqual(json.loads(path.read_text())["args"][1],
+                         str(stored / "expert-profile.bin"))
+
+    def test_the_data_folder_is_stored_for_every_quant(self) -> None:
+        """A build for a second quant stores the same runtime files for that quant.
+
+        `point_config_at_build` is what the Build tab calls for each quant, so every
+        quant gets its own data folder, not only the one the config was written for.
+        """
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        (clone / "data").mkdir(parents=True)
+        (clone / "data" / "expert-profile.bin").write_bytes(b"profile")
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--pack", str(self.root / "Strata-data" / "packs" / "q2_0"),
+                       "--expert-profile", "/ABSOLUTE/PATH/TO/expert-profile.bin"]
+        for key in ("q2_0", "iq2_s", "q4_k_m"):
+            changes = quant_store.point_config_at_build(cfg, key, source_root=clone)
+            stored = quant_store.data_dir(key)
+            self.assertTrue((stored / "expert-profile.bin").is_file(),
+                            f"a build for {key} stored nothing for it")
+            self.assertIn("runtime file(s) from the clone stored", " ".join(changes))
+            self.assertEqual(cfg["args"][3], str(stored / "expert-profile.bin"),
+                             f"the config for {key} was left pointing at the placeholder")
+
+    def test_a_data_file_that_is_already_on_this_box_is_left_where_it_is(self) -> None:
+        """The rule for a path that exists still holds: it is the user's file."""
+        other = self.root / "another-install" / "data"
+        other.mkdir(parents=True)
+        (other / "expert-profile.bin").write_bytes(b"the one the user installed")
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        (clone / "data").mkdir(parents=True)
+        (clone / "data" / "expert-profile.bin").write_bytes(b"the build's profile")
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--expert-profile", str(other / "expert-profile.bin")]
+        (self.config / "run-q2_0.json").write_text(json.dumps(cfg), encoding="utf-8")
+        path, _ = quant_store.ensure_run_config("q2_0", source_root=clone)
+        self.assertEqual(json.loads(path.read_text())["args"][1], str(other / "expert-profile.bin"),
+                         "the Build tab moved a runtime file the user installed elsewhere")
+        self.assertEqual((other / "expert-profile.bin").read_bytes(), b"the one the user installed")
+
+    def test_a_data_file_the_build_stored_for_another_quant_is_repointed(self) -> None:
+        """A config for q2_0 left pointing at another build's data folder is stale."""
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        (clone / "data").mkdir(parents=True)
+        (clone / "data" / "expert-profile.bin").write_bytes(b"profile")
+        other = quant_store.data_dir("iq2_xs")
+        other.mkdir(parents=True)
+        (other / "expert-profile.bin").write_bytes(b"the earlier build")
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--expert-profile", str(other / "expert-profile.bin")]
+        (self.config / "run-q2_0.json").write_text(json.dumps(cfg), encoding="utf-8")
+        path, _ = quant_store.ensure_run_config("q2_0", source_root=clone)
+        written = json.loads(path.read_text())["args"][1]
+        self.assertEqual(written, str(quant_store.data_dir("q2_0") / "expert-profile.bin"),
+                         "the config for q2_0 still pointed at another build's data folder")
+
+    def test_a_model_path_is_not_treated_as_a_runtime_data_file(self) -> None:
+        """A pack or a model shard is filled from the data area, not from the build."""
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        (clone / "data").mkdir(parents=True)
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--pack", "/ABSOLUTE/PATH/TO/packs/q2_0", "--native",
+                       "/ABSOLUTE/PATH/TO/models/Q2_0/x.gguf"]
+        (self.config / "run-q2_0.json").write_text(json.dumps(cfg), encoding="utf-8")
+        _, note = quant_store.ensure_run_config("q2_0", source_root=clone)
+        written = json.loads((self.config / "run-q2_0.json").read_text())["args"]
+        self.assertEqual(written, cfg["args"],
+                         "a model path was filled from the build's data folder")
+        self.assertNotIn("runtime file(s)", note, "a model path was read as a runtime data file")
+
+    def test_the_default_engine_gets_its_own_data_folder(self) -> None:
+        """The engine in engine/ has no quant key, so its data folder is engine/data/."""
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        (clone / "data").mkdir(parents=True)
+        (clone / "data" / "expert-profile.bin").write_bytes(b"profile")
+        copied = quant_store.carry_data_dir(None, clone)
+        self.assertEqual(copied, ["expert-profile.bin"])
+        self.assertEqual(quant_store.data_dir(None), self.engine / "data")
+        self.assertTrue((self.engine / "data" / "expert-profile.bin").is_file())
+
     def test_a_model_store_outside_the_repository_is_left_where_it_is(self) -> None:
         cfg = json.loads(self.BASE)
         cfg["args"] = ["--pack", "/home/anotheruser/Strata-data/packs/q2_0"]
@@ -509,6 +612,84 @@ class RunConfigTests(unittest.TestCase):
     def test_a_bad_quant_name_is_refused_not_turned_into_a_file(self) -> None:
         with self.assertRaises(ValueError):
             quant_store.ensure_run_config("q2 0%!")
+
+
+class MergeDataTests(unittest.TestCase):
+    """The data folder a build's clone carries is merged into the project's data/."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = self.root / "data"
+        self.clone = self.root / "tmp" / "strata-v0.1.45"
+        self._saved = (quant_store.ROOT, quant_store.PROJECT_DATA_DIR, quant_store.TMP_DIR)
+        quant_store.ROOT = self.root
+        quant_store.PROJECT_DATA_DIR = self.data
+        quant_store.TMP_DIR = self.root / "tmp"
+        # the app's own files, which a merge must never touch
+        (self.data / "history" / "chats").mkdir(parents=True)
+        (self.data / "history" / "index.json").write_text("[]", encoding="utf-8")
+        (self.data / "media").mkdir()
+        (self.data / "media" / "chat_1.png").write_bytes(b"the app's own file")
+
+    def tearDown(self) -> None:
+        quant_store.ROOT, quant_store.PROJECT_DATA_DIR, quant_store.TMP_DIR = self._saved
+        self.tmp.cleanup()
+
+    def clone_file(self, rel: str, content: bytes) -> Path:
+        path = self.clone / "data" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        return path
+
+    def test_the_clone_data_is_merged_into_the_project_data(self) -> None:
+        self.clone_file("expert-profile.bin", b"profile")
+        self.clone_file("draft_vocab.bin", b"vocab")
+        self.clone_file("experimental-speed-projection/projection.gguf", b"projection")
+        merged = quant_store.merge_data(self.clone)
+        self.assertEqual(sorted(merged["added"]), [
+            "draft_vocab.bin", "experimental-speed-projection/projection.gguf",
+            "expert-profile.bin"])
+        for rel in merged["added"]:
+            self.assertTrue((self.data / rel).is_file(), f"{rel} was not merged")
+        # the app's own files are still there and unchanged
+        self.assertEqual((self.data / "media" / "chat_1.png").read_bytes(), b"the app's own file")
+        self.assertEqual((self.data / "history" / "index.json").read_text(encoding="utf-8"), "[]")
+
+    def test_a_file_already_in_data_is_not_overwritten(self) -> None:
+        self.data.joinpath("expert-profile.bin").write_bytes(b"the one the app already had")
+        self.clone_file("expert-profile.bin", b"the build's profile")
+        merged = quant_store.merge_data(self.clone)
+        self.assertEqual(merged["added"], [])
+        self.assertEqual(merged["skipped"], ["expert-profile.bin"])
+        self.assertEqual(self.data.joinpath("expert-profile.bin").read_bytes(),
+                         b"the one the app already had",
+                         "the merge replaced a file the project already had")
+
+    def test_running_the_merge_twice_changes_nothing(self) -> None:
+        self.clone_file("expert-profile.bin", b"profile")
+        first = quant_store.merge_data(self.clone)
+        second = quant_store.merge_data(self.clone)
+        self.assertEqual(second["added"], [])
+        self.assertEqual(second["same"], first["added"])
+        self.assertEqual(sorted(p.name for p in self.data.rglob("*") if p.is_file()),
+                         ["chat_1.png", "expert-profile.bin", "index.json"],
+                         "the merge wrote a file twice")
+
+    def test_a_clone_with_no_data_folder_is_not_an_error(self) -> None:
+        self.clone.mkdir(parents=True, exist_ok=True)
+        self.assertEqual(quant_store.merge_data(self.clone),
+                         {"added": [], "skipped": [], "same": []})
+        self.assertEqual(sorted(p.name for p in self.data.rglob("*") if p.is_file()),
+                         ["chat_1.png", "index.json"],
+                         "a build that shipped data created files anyway")
+
+    def test_nothing_is_written_outside_the_project(self) -> None:
+        self.clone_file("expert-profile.bin", b"profile")
+        outside = Path(self.root).parent / "outside-the-project"
+        merged = quant_store.merge_data(self.clone, dest=outside)
+        self.assertEqual(merged["added"], [])
+        self.assertFalse(outside.exists(), "the merge wrote outside the project root")
 
 
 if __name__ == "__main__":

@@ -7,10 +7,13 @@ Two ways to update the engine, both offered:
   from source  shallow-clone the release into tmp/, inject engine-src/ so the
                HyperCore worker targets exist, configure with the options the
                Build tab's dropdowns came from, build strata + strata-vision +
-               hypercore-worker, copy them into engine/, delete tmp/.
+               hypercore-worker, copy them into engine/, merge the clone's data/ into
+               the project's data/, leave tmp/ as it is.
 
-tmp/ holds exactly one clone at a time and is deleted when a build finishes.
-Nothing at runtime reads it.
+tmp/ holds exactly one clone at a time. It is no longer deleted when a build
+finishes: the clone's data/ folder (expert-profile.bin and the other runtime files)
+is what a run config points at, and removing the clone removes them. Nothing at
+runtime reads it, so a kept clone is only ever used by the next build.
 
 The version manifest is extracted from the clone itself (tools/extract_build_options.py),
 never from a list we maintain, so a release that adds an option shows up in the
@@ -610,11 +613,31 @@ class BuildJob:
             "result": self.result,
         }
 
+    def merge_clone_data(self, clone: Path) -> dict[str, list[str]]:
+        """Merge the clone's data/ into the project's data/ and report it in the log.
+
+        The build log is where a build's result is read, so the merge says what it put
+        there and what it refused to overwrite. Nothing is raised: a clone with no data
+        folder is a build that shipped nothing, which is not an error.
+        """
+        merged = quant_store.merge_data(clone)
+        if merged["added"]:
+            self.log_line(f"merged data/: {len(merged['added'])} file(s) from the clone")
+        if merged["skipped"]:
+            self.log_line(f"data/: {len(merged['skipped'])} file(s) already there and "
+                          "different, kept as they were")
+        return merged
+
     def clean_tmp(self) -> None:
-        """Only one Strata clone may exist in tmp/."""
-        for path in TMP_DIR.iterdir():
-            if path.is_dir() and path.name.startswith("strata-"):
-                shutil.rmtree(path, ignore_errors=True)
+        """Leave the Strata clone in tmp/ instead of removing it.
+
+        The call sites are kept so the build flow is unchanged; the removal itself is
+        commented out. A build that finds its clone already there is the consequence -
+        see the note in the git clone step.
+        """
+        # for path in TMP_DIR.iterdir():
+        #     if path.is_dir() and path.name.startswith("strata-"):
+        #         shutil.rmtree(path, ignore_errors=True)
 
     def configured_targets(self, build_dir: Path) -> set[str]:
         """The target names a configured project defines, read from its build.ninja.
@@ -808,6 +831,10 @@ class BuildJob:
             self.clean_tmp()
 
             self.state = "cloning"
+            # clean_tmp no longer removes the clone, so a second build of the same tag
+            # finds it here and git refuses to clone into a folder that already has a
+            # checkout. The build reports that as "git clone failed"; reusing the clone
+            # would be a behaviour change, so it is not done here.
             code = self.run_stream(["git", "clone", "--depth", "1", "--branch", tag,
                                    f"https://github.com/{REPO}.git", str(clone)])
             if code != 0:
@@ -876,8 +903,13 @@ class BuildJob:
             }
             copied, key = self.transfer_binaries(build_dir, meta, quant, [vision] if vision else [])
 
-            self.clean_tmp()          # tmp/ is scratch: nothing at runtime reads it
-            self.result = {"copied": copied, "version": meta["version"], "quant": key}
+            # The clone's data/ is merged into the project's data/ before tmp/ is
+            # touched, so the runtime files the release ships survive the build.
+            merged = self.merge_clone_data(clone)
+
+            self.clean_tmp()          # tmp/ is left in place: nothing at runtime reads it
+            self.result = {"copied": copied, "version": meta["version"], "quant": key,
+                           "merged_data": merged}
             self.state = "done"
         except Exception as exc:  # noqa: BLE001 - report it to the tab, do not take the server down
             self.state = "failed"

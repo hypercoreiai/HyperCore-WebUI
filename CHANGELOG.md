@@ -68,8 +68,41 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   going, the percent of a download in progress, and every `[X]`, `[!]` or traceback it
   printed. A from-source build reports its own stage (cloning, configuring, compiling,
   transferring) in the same card. One
-  clone in `tmp/` at a time; it is deleted when the build finishes and nothing at
-  runtime reads it.
+  clone in `tmp/` at a time; it is no longer deleted when a build finishes — the
+  `rmtree` in `clean_tmp()` is commented out — because the clone's `data/` folder (the
+  expert profile, the speed-projection gguf) is what a run config's runtime paths point
+  at, and a build that removes the clone removes them with it. Nothing at runtime reads
+  `tmp/`, so a kept clone is only ever used by the next build; a second build of the
+  same tag now finds its own clone there and `git clone` refuses, which is reported as
+  `git clone failed`.
+- **A build merges `data/`**: when a from-source build finishes, the clone's `data/`
+  folder (the expert profile, the draft vocab, the speed-projection) is merged into the
+  project's `data/`, which is where the app keeps its own files, so one folder holds
+  both and the clone can be kept or removed without either being lost. Nothing is
+  overwritten: a file already in `data/` is the app's own, so a same-name file from the
+  build that is not the same bytes is reported as skipped instead of replacing it, and a
+  file that is already identical is not counted as a change. `serve/quant_store.py`
+  `merge_data()` does the copy and `serve/build_api.py` `merge_clone_data()` reports it
+  in the build log as `merged data/: N file(s) from the clone`. It runs after the
+  transfer and before `tmp/` is touched. `tests/test_quant_store.py` `MergeDataTests`
+  (5 cases) and `tests/test_build_api.py` `MergeDataTests` (4 cases) cover it. A run
+  config's runtime paths are not rewritten by the merge — they still point at
+  `engine/engine_<quant>/data/`, which is what `carry_runtime_data()` fills.
+- **A build stores the runtime files for every quant, and the run config is updated to
+  match.** `carry_runtime_data` only copied the files a run config happened to *name*
+  inside the clone, so a config written from the template — whose `--expert-profile` is
+  the placeholder `/ABSOLUTE/PATH/TO/expert-profile.bin` — stored nothing, and a q2_0
+  build produced `engine/engine_q2_0/` with binaries and no `data/` folder at all while
+  `engine/engine_iq2_xs/data/expert-profile.bin` happened to exist. `quant_store.carry_data_dir()`
+  now copies the whole `data/` folder the release carries into `engine/engine_<quant>/data/`
+  for every quant, including the default engine (`engine/data/`), and nothing already
+  there is overwritten. `quant_store.point_data_at_build()` then updates the run config:
+  a data path matched by the file name the engine reads it by is repointed at the copy
+  this build stored — a placeholder, a path on another install that is not on this box,
+  or a stale pointer left by a build for a different quant. A data file that already
+  exists on this box is left where it is, and model paths (packs, model shards, mtp)
+  are still `repair_model_paths`' business. 7 new cases in `tests/test_quant_store.py`
+  and `tests/test_build_api.py`.
 - **A build plan cmake accepts**: the Build tab applies the same guards upstream's
   `CMakeLists.txt` uses before cmake is called. `BACKEND_REQUIREMENTS` in
   `serve/build_api.py` lists them (v0.1.45: `:97` `STRATA_PREFILL_MMQ` needs HIP,

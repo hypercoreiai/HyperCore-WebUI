@@ -69,6 +69,11 @@ BINARIES = (EXE, VEXE, WORKER)
 #: libstrata_kq.so "next to the engine", so these must travel with the binary.
 SIDE_LIB = re.compile(r"^(libstrata|libhypercore)[a-z0-9_]*\.(so|dll)$")
 
+#: The project's own data folder: where the app keeps its files (history, media). The
+#: runtime files a build's clone carries are merged into it, so one folder holds both.
+#: This is not the model data area - that is `Strata-data`, see data_root().
+PROJECT_DATA_DIR = ROOT / "data"
+
 #: q2_0, IQ2_S, Q4_K_M, q3_K_S: a leading letter, then letter/digit groups joined
 #: by single underscores. Anything else is a typo, not a quant.
 QUANT_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
@@ -91,8 +96,10 @@ def _digest(path: Path) -> str:
 
 
 def _is_scratch(path: Path) -> bool:
-    """Whether a path is in tmp/, the build scratch directory that is deleted when a
-    build finishes. Nothing that has to survive a build may live there."""
+    """Whether a path is in tmp/, the build scratch directory. A run config must not
+    point there: the clone is only there while a build is running, and a build that
+    failed leaves nothing behind. Nothing that has to survive a build may live there.
+    """
     try:
         Path(path).resolve().relative_to(TMP_DIR)
         return True
@@ -149,7 +156,13 @@ def store_dir(quant: Any) -> Path:
 
 
 def data_dir(quant: Any) -> Path:
-    """The runtime files a build ships, kept next to the engine that uses them."""
+    """The runtime files a build ships, kept next to the engine that uses them.
+
+    engine/engine_<quant>/data/. The default engine has no quant key and lives in
+    engine/ itself, so its data folder is engine/data/.
+    """
+    if quant is None or str(quant).strip() in ("", DEFAULT_KEY):
+        return ENGINE_DIR / "data"
     return store_dir(quant) / "data"
 
 
@@ -399,6 +412,150 @@ def carry_runtime_data(quant: Any, cfg: dict[str, Any], source_root: Path) -> li
     return moved
 
 
+def merge_data(source_root: Path, dest: Path | None = None) -> dict[str, list[str]]:
+    """Merge the data folder of a build's clone into this project's data folder.
+
+    A build's clone carries the runtime files the engine reads at run time
+    (expert-profile.bin, the draft vocab, the speed-projection). They are merged into
+    the project's data/ so the app's own files and the files a build ships live in one
+    folder, and the clone can be kept in tmp/ or removed without either being lost.
+
+    Nothing is overwritten: a file already in the project's data folder is the app's
+    own, so a same-name file from the build that is not the same bytes is reported as
+    skipped rather than replacing it. A file that is already identical is not counted as
+    a change. Folders the clone has are created; nothing is read from data/ afterwards
+    by the server, so the merge is a one-way copy at build time.
+
+    Returns {"added", "skipped", "same"}, paths relative to the data folder. Empty when
+    the clone has no data folder - a build that produced nothing is not an error here.
+    """
+    src = Path(source_root).resolve() / "data"
+    target_dir = Path(dest) if dest else PROJECT_DATA_DIR
+    out: dict[str, list[str]] = {"added": [], "skipped": [], "same": []}
+    if not src.is_dir() or not _under(ROOT, target_dir):
+        return out
+
+    for path in sorted(src.rglob("*")):
+        rel = path.relative_to(src)
+        dest_file = target_dir / rel
+        try:
+            if path.is_dir():
+                dest_file.mkdir(parents=True, exist_ok=True)
+                continue
+            if not path.is_file() or not _under(ROOT, dest_file):
+                continue
+            if dest_file.exists():
+                if dest_file.stat().st_size == path.stat().st_size and \
+                        _digest(dest_file) == _digest(path):
+                    out["same"].append(str(rel))
+                else:
+                    out["skipped"].append(str(rel))
+                continue
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest_file)
+            out["added"].append(str(rel))
+        except OSError:
+            continue
+    return out
+
+
+def carry_data_dir(quant: Any, source_root: Path) -> list[str]:
+    """Copy every runtime file a build's clone ships into the store's data folder.
+
+    This is the part that was missing: `carry_runtime_data` only copied the files a run
+    config happened to name inside the clone, so a build whose config named a
+    placeholder, or a file on another install, stored nothing - a q2_0 build produced
+    `engine/engine_q2_0/` with binaries and no data folder at all. The release carries
+    `data/` (the expert profile, the draft vocab, the speed projection), and every model
+    needs it, so the whole folder is copied for every quant, into
+    `engine/engine_<quant>/data/`.
+
+    Nothing already there is overwritten: a file the store holds is the one a run config
+    points at. Returns the paths copied, relative to the data folder.
+    """
+    src = Path(source_root).resolve() / "data"
+    dest = data_dir(quant)
+    if not src.is_dir() or not _under(ENGINE_DIR, dest):
+        return []
+    copied: list[str] = []
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        for path in sorted(src.rglob("*")):
+            rel = path.relative_to(src)
+            if path.is_dir():
+                (dest / rel).mkdir(parents=True, exist_ok=True)
+                continue
+            if not path.is_file():
+                continue
+            target = dest / rel
+            if target.exists():
+                continue
+            shutil.copy2(path, target)
+            copied.append(str(rel))
+    except OSError:
+        return copied
+    return copied
+
+
+def point_data_at_build(cfg: dict[str, Any], key: Any) -> list[str]:
+    """Point a run config's runtime data paths at the copies this build stored.
+
+    A config written from the template names a placeholder
+    (`/ABSOLUTE/PATH/TO/expert-profile.bin`), and a config copied from another install
+    names that install's file: both name the runtime files a build ships, and until now
+    neither was ever updated, so the run config kept pointing at a file that was never
+    there. A path is matched by the file name the engine reads it by, so a placeholder
+    is recognised as well as a real path. A path that already exists on this box is left
+    as it is - the file the user installed elsewhere is theirs - unless it points at
+    another engine build's data folder, which is a stale pointer from an earlier build.
+    A model path (a pack, a model shard, an mtp folder) is not touched here,
+    `repair_model_paths` owns those. Returns what changed.
+    """
+    stored = data_dir(key)
+    if not stored.is_dir():
+        return []
+    names = {p.name.lower() for p in stored.rglob("*") if p.is_file()}
+    changes: list[str] = []
+    here = stored.resolve().relative_to(ENGINE_DIR)
+
+    def other_build(value: str) -> bool:
+        """Whether a path points at a different engine build's data folder.
+
+        A run config written for one quant keeps pointing at the data folder that build
+        stored even when it now runs a build for another quant. That is a stale pointer,
+        not a file the user installed, so it is repointed.
+        """
+        try:
+            rel = Path(value).resolve().relative_to(ENGINE_DIR)
+        except (ValueError, OSError):
+            return False
+        return rel.parts[:len(here.parts)] != tuple(here.parts)
+
+    def fix(value: str) -> str:
+        file_part, tail = (value.split(":", 1) + [""])[:2]
+        name = Path(file_part).name.lower()
+        if name not in names:
+            return value
+        target = stored / Path(file_part).name
+        if _exists(value) and not other_build(value):
+            return value
+        out = f"{target}{(':' + tail) if tail else ''}"
+        changes.append(f"{value} -> {out}")
+        return out
+
+    args = cfg.get("args")
+    if isinstance(args, list):
+        for i, item in enumerate(args):
+            if isinstance(item, str) and "/" in item and not item.startswith("-"):
+                new = fix(item)
+                if new != item:
+                    args[i] = new
+    for field in ("tokenizer",):
+        if isinstance(cfg.get(field), str):
+            cfg[field] = fix(cfg[field])
+    return changes
+
+
 # ---------------------------------------------------------------- choosing one
 def materialise(key: str) -> tuple[bool, str]:
     """Put the binaries of one build where the old run configs look: engine/.
@@ -601,12 +758,14 @@ def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | Non
 
     Three things are corrected, and only when they are wrong:
       exe   the engine binary of this build, inside engine/engine_<quant>/
-      cwd   never the build scratch directory, which is deleted after the build
+      cwd   never the build scratch directory, which is deleted after a build
       log   inside logs/, so an engine never writes outside this repository
-    Anything the config names under `source_root` (the clone the build ran in) is
-    copied into engine/engine_<quant>/data/ and rewritten. A model path that belongs to
-    another install, or a placeholder the template left, is filled from this project's
-    data area: a path that exists is never overwritten. Returns what changed.
+    Every runtime file the clone's data/ folder carries is stored in
+    engine/engine_<quant>/data/ for every quant - not only the ones this config happens
+    to name - and the config's data paths are pointed at those copies when the path they
+    name is not on this box. A model path that belongs to another install, or a
+    placeholder the template left, is filled from this project's data area: a path that
+    exists is never overwritten. Returns what changed.
     """
     changes: list[str] = []
     built = store_dir(key)
@@ -631,10 +790,15 @@ def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | Non
         changes.append("log -> logs/strata-<quant>.log")
 
     if source_root:
+        stored = carry_data_dir(key, source_root)
+        if stored:
+            changes.append(f"{len(stored)} runtime file(s) from the clone stored in "
+                           f"engine/{built.name}/data")
         moved = carry_runtime_data(key, cfg, source_root)
         if moved:
             changes.append(f"{len(moved)} runtime file path(s) moved into engine/{built.name}/data")
 
+    changes += point_data_at_build(cfg, key)
     changes += repair_model_paths(cfg, key)
     return changes
 
