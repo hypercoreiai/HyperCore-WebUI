@@ -256,7 +256,7 @@ function showTab(name) {
   for (const v of TABS) $(`view-${v}`).hidden = v !== tab;
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", tab === "chat" ? location.pathname : `#${tab}`);
   if (tab === "chat") $("input").focus();
-  if (tab === "monitor") { loadMcp(); loadAssistMonitor(); }
+  if (tab === "monitor") { loadMcp(); loadAssistMonitor(); loadHistory(); }
   if (tab === "about") loadConfig();
   if (tab === "assist") { loadAssistModels(); renderAssist(); $("assist-input").focus(); }
   if (tab === "tune") loadTune();
@@ -360,7 +360,7 @@ async function poll() {
   } catch (e) {
     if (++metricsFailures === 3) setPill("error", "Server not reachable");
   }
-  if (tab === "monitor" && ++mcpTick % 10 === 0) { loadMcp(); loadAssistMonitor(); }       // server states change rarely: every 10 s
+  if (tab === "monitor" && ++mcpTick % 10 === 0) { loadMcp(); loadAssistMonitor(); loadHistory(); }       // server states change rarely: every 10 s
   if (!shuttingDown) setTimeout(poll, 1000);   // after Shut Down the server is gone: stop asking it
 }
 
@@ -761,6 +761,52 @@ function renderAssistMonitor() {
       unverified.map((m) => `<span class="chip" title="${esc(m.error || "no measurement")}">${esc(m.id)}</span>`).join("") + `</div>`;
   }
 }
+
+// ------------------------------------------------------------------ Chat history (GET /history/status)
+// The archive the Chat tab writes, and the state of the distillation that turns it into
+// topic files. The numbers are counts of files, so this stays cheap enough to poll.
+let historyState = null;
+async function loadHistory() {
+  try {
+    const r = await fetch("history/status", {headers: headers()});
+    if (!r.ok) return;                                      // no key yet, or an older server
+    historyState = await r.json();
+  } catch (e) { return; }
+  renderHistory();
+}
+
+function renderHistory() {
+  const card = $("history-card");
+  if (!card || !historyState) return;
+  const h = historyState, d = h.distil || {}, dist = h.distilled || {};
+  $("history-sum").textContent = d.running ? "rebuilding" : `${h.topics} topics`;
+  const last = d.last || {};
+  $("history-facts").innerHTML = [
+    ["Transcripts here", h.transcripts],
+    ["Distilled from", dist.transcripts || h.summaries || 0],
+    ["Chat summaries", h.summaries],
+    ["Topic files", h.topics],
+    ["Notes", h.notes],
+    ["Last archived", h.newest || "none yet"],
+    ["Last rebuild", last.started ? `${last.ok ? "ok" : "failed"} in ${fmt(last.seconds, 1)} s` : "none this session"],
+  ].map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(String(v))}</dd></div>`).join("");
+  $("history-rebuild").disabled = !!d.running;
+  card.hidden = false;
+}
+
+$("history-rebuild").onclick = async () => {
+  const btn = $("history-rebuild");
+  btn.disabled = true; btn.textContent = "Rebuilding";
+  try {
+    const res = await fetch("/history/distil", {method: "POST", headers: headers(true), body: "{}"});
+    const out = await res.json();
+    toast(out.ok ? "success" : "error", "History rebuild", out.ok ? (out.output || "done") : (out.error || "failed"), 8000);
+  } catch (e) {
+    toast("error", "Could not rebuild the history", e.message || String(e), 8000);
+  } finally {
+    btn.textContent = "Rebuild now"; loadHistory();
+  }
+};
 
 // ------------------------------------------------------------------ Model settings (GET / POST /config, #564)
 // A few documented keys of the run config (hypercore-<model>.json), for every client, from the next start on.  The

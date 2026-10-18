@@ -3755,6 +3755,10 @@ def make_handler(svc: Service):
                 if self._authorized():
                     self._json(200, chat_archive.distil_status())
                 return
+            if path == "/history/status":                    # what is in the history folder now
+                if self._authorized():
+                    self._json(200, chat_archive.history_status())
+                return
             if path == "/mcp":
                 # the MCP servers, their state and tools (the web app's switch and Monitor card), plus
                 # the size of the tool block the template adds: the page needs it before it has a

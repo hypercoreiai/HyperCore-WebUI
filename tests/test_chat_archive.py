@@ -8,10 +8,13 @@ or a real model.
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -166,6 +169,71 @@ class ServerRouteTests(unittest.TestCase):
         finally:
             proc.terminate()
             proc.wait(timeout=10)
+
+
+    def test_the_history_status_reports_the_folder(self) -> None:
+        port = self._free_port()
+        stub = self.tmp / "distil_stub.py"
+        stub.write_text("print('distil ok')\n", encoding="utf-8")
+        env = dict(os.environ, HYPERCORE_OLD_CHATS=str(self.tmp), HYPERCORE_DISTIL_SCRIPT=str(stub))
+        proc = subprocess.Popen([sys.executable, "-m", "serve.server", "--engine", "mock",
+                                 "--port", str(port)], cwd=str(ROOT), env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.time() + self.STARTUP_S
+            while time.time() < deadline:
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as r:
+                        if r.status == 200:
+                            break
+                except (urllib.error.URLError, OSError):
+                    time.sleep(0.25)
+            else:
+                self.fail("the mock server did not come up")
+
+            archive_chat("## You\n\nstatus check\n", "status", Path(self.tmp), NOW)
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/history/status", timeout=10) as r:
+                status = json.loads(r.read())
+            self.assertEqual(r.status, 200, status)
+            self.assertEqual(status["transcripts"], 1, status)
+            self.assertIn("topics", status)
+            self.assertIn("notes", status)
+            self.assertTrue(status["newest"].startswith("20"), status["newest"])
+            self.assertTrue(status["distil"]["auto"], "the status does not report the automatic pass")
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+
+    def test_an_empty_history_reports_zero_instead_of_failing(self) -> None:
+        empty = Path(tempfile.mkdtemp())
+        old, hist = chat_archive.OLD_CHATS_DIR, chat_archive.HIST
+        chat_archive.OLD_CHATS_DIR, chat_archive.HIST = empty, empty
+        try:
+            status = chat_archive.history_status()
+            self.assertEqual(status["transcripts"], 0, status)
+            self.assertEqual(status["summaries"], 0, status)
+            self.assertIsNone(status["newest"], "an empty folder has no newest transcript")
+            self.assertIsNone(status["distilled"], "there is no index to read")
+        finally:
+            chat_archive.OLD_CHATS_DIR, chat_archive.HIST = old, hist
+            import shutil
+            shutil.rmtree(empty, ignore_errors=True)
+
+    def test_a_helper_file_in_the_history_folder_is_not_a_transcript(self) -> None:
+        folder = Path(tempfile.mkdtemp())
+        (folder / "2026-10-17-23-12-real.md").write_text("## You\n\nreal chat\n", encoding="utf-8")
+        (folder / "distil_stub.py").write_text("print('not a chat')\n", encoding="utf-8")
+        (folder / "notes.txt").write_text("scratch\n", encoding="utf-8")
+        old, hist = chat_archive.OLD_CHATS_DIR, chat_archive.HIST
+        chat_archive.OLD_CHATS_DIR, chat_archive.HIST = folder, folder
+        try:
+            status = chat_archive.history_status()
+            self.assertEqual(status["transcripts"], 1, status)
+            self.assertEqual(status["newest"], "2026-10-17-23-12-real.md", status)
+        finally:
+            chat_archive.OLD_CHATS_DIR, chat_archive.HIST = old, hist
+            import shutil
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 class DistilHookTests(unittest.TestCase):

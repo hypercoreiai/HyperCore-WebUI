@@ -168,6 +168,15 @@
           this card can show what was sent and what came back. The models that were timed but not pinned are listed
           with their lag, which is why a model can be on the endpoint and still absent from the dropdown.</p>
       </div>
+
+      <div class="st-card history-card" id="history-card" hidden>
+        <div class="req-head"><span class="card-title">Chat history</span><span class="muted small" id="history-sum"></span>
+          <button type="button" class="st-btn" id="history-rebuild">Rebuild now</button></div>
+        <dl class="facts" id="history-facts"></dl>
+        <p class="muted small">The archive button on the Chat tab writes a transcript to <code>data/history/_old_chats/</code>;
+          <code>tools/build_history.py</code> distils the transcripts into <code>chats/</code>, <code>topics/</code> and
+          <code>notes/</code>. Archiving starts that rebuild on its own; this button runs it without waiting for a chat.</p>
+      </div>
     </div>
   </section>
 

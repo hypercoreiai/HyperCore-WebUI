@@ -89,6 +89,11 @@ rendered from it.
 - **MCP servers.** Each server, its status and its tools. A switch turns that server off
   without reloading the model.
 - **External assistants.** The Assist calls and the pinned model list.
+- **Chat history.** How many transcripts are in `data/history/_old_chats/`, how many were
+  distilled into `chats/`, `topics/` and `notes/`, which one was archived last, and when the
+  last rebuild ran and how long it took. "Rebuild now" runs `tools/build_history.py` on the
+  spot; the button is disabled while a rebuild is already running. Counts only, so polling it
+  is cheap (`GET /history/status`).
 
 ![The Monitor tab, first view](data/media/monitor_3.a.png)
 

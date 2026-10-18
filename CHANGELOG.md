@@ -46,6 +46,12 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   /history/distil` reports the state, `POST /history/distil` runs one now,
   `HYPERCORE_AUTO_DISTIL=0` turns the automatic pass off and `HYPERCORE_DISTIL_SCRIPT`
   points the hook at a builder kept elsewhere.
+- **Monitor history card**: the Monitor tab shows what is in the archive (transcripts, chat
+  summaries, topic files, notes, the newest transcript, the last rebuild and its duration)
+  and has a "Rebuild now" button that runs the builder on request. The card is hidden until
+  the data arrives and disabled while a rebuild is in flight. `GET /history/status` supplies
+  it, and the counts are of `.md` files only, so a helper script left in the folder is not
+  reported as a transcript (`tests/test_monitor_history_card.js`).
 - **Tool call cap**: `mcp.max_tool_calls` (default 500) bounds the tool calls a single
   request may run. `mcp.max_rounds` bounds the assistant turns that may emit calls, and
   one turn can emit several calls, so the round cap alone is not a call cap. Calls past

@@ -19,6 +19,7 @@ automatic pass off and leaves the button as a plain save.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -32,6 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 #: Overridable so a test, or a machine with the history elsewhere, can point it
 #: at its own directory without touching the code.
 OLD_CHATS_DIR = Path(os.environ.get("HYPERCORE_OLD_CHATS") or ROOT / "data" / "history" / "_old_chats")
+
+#: The history root. _old_chats/ is the input; chats/, topics/ and notes/ are what
+#: tools/build_history.py writes beside it.
+HIST = OLD_CHATS_DIR.parent
 
 #: A transcript is a chat, not a log file.  The guard is there so a stray POST
 #: (or a client sending a whole corpus) cannot fill the history folder.
@@ -149,3 +154,40 @@ def distil_status() -> dict[str, object]:
     with _distil_lock:
         return {"auto": AUTO_DISTIL, "running": bool(_distil_state["running"]),
                 "last": _distil_state["last"], "script": str(DISTIL_SCRIPT)}
+
+
+def history_status() -> dict[str, object]:
+    """What is in the history folder right now, for the Monitor.
+
+    Counts only; nothing here reads the transcripts, so it is cheap enough to poll.
+    The transcript count is the local folder's; the builder also reads the other
+    source folders, so the index's own count is reported separately as `distilled`.
+    """
+    def count_markdown(directory: Path) -> int:
+        #: Only the documents count. A helper script or a scratch file sitting in
+        #: the folder is not a transcript, and reporting it as one makes the
+        #: Monitor lie about how much memory the agent has.
+        if not directory.is_dir():
+            return 0
+        return sum(1 for p in directory.glob("*.md") if p.is_file())
+
+    transcripts = sorted(OLD_CHATS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    distilled = None
+    index = HIST / "index.json"
+    if index.is_file():
+        try:
+            data = json.loads(index.read_text(encoding="utf-8"))
+            distilled = {"built": data.get("built"), "transcripts": data.get("transcripts"),
+                        "topics": data.get("topics")}
+        except (OSError, ValueError):
+            distilled = None
+    return {
+        "old_chats": str(OLD_CHATS_DIR),
+        "transcripts": count_markdown(OLD_CHATS_DIR),
+        "summaries": count_markdown(HIST / "chats"),
+        "topics": count_markdown(HIST / "topics"),
+        "notes": count_markdown(HIST / "notes"),
+        "newest": transcripts[0].name if transcripts else None,
+        "distilled": distilled,
+        "distil": distil_status(),
+    }
