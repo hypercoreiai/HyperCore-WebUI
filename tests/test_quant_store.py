@@ -342,6 +342,71 @@ class RunConfigTests(unittest.TestCase):
         self.assertNotIn(str(area), str(cfg.get("log", "")))
         self.assertEqual(cfg["model_name"], "qwen3.8-flash-next-iq2_xs")
 
+    def test_a_placeholder_shard_is_matched_to_the_file_the_area_actually_names(self) -> None:
+        """The template names a shard; the area holds it under the model's own name."""
+        project = self.root / "HyperCore-WebUI"
+        project.mkdir()
+        area = self.root / "Strata-data"
+        model = area / "models" / "IQ2_XS"
+        model.mkdir(parents=True)
+        for shard in ("00001", "00002"):
+            (model / f"Qwen3.8-Flash-Next-IQ2_XS-{shard}-of-00002.gguf").write_text("m")
+        (model / "Qwen3.8-Flash-Next-IQ2_XS-00001-of-00002.gguf.done").write_text("d")
+        (self.config / "run-q2_0.json").unlink()          # the template is the only shape left
+        template = {
+            "exe": "engine/strata",
+            "args": ["--pack", "/ABSOLUTE/PATH/TO/packs/q2_0",
+                     "--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf",
+                     "--ple-gguf", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00002-of-00002.gguf",
+                     "--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00007-of-00002.gguf"],
+            "model_name": "q2_0",
+            "log": "logs/strata-q2_0.log",
+            "port": 8080,
+        }
+        (self.config / "run-example.json").write_text(json.dumps(template), encoding="utf-8")
+        saved = quant_store.ROOT
+        quant_store.ROOT = project
+        try:
+            path, note = quant_store.ensure_run_config("IQ2_XS")
+        finally:
+            quant_store.ROOT = saved
+        self.assertIsNotNone(path, note)
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        shard1 = model / "Qwen3.8-Flash-Next-IQ2_XS-00001-of-00002.gguf"
+        shard2 = model / "Qwen3.8-Flash-Next-IQ2_XS-00002-of-00002.gguf"
+        absent = "/ABSOLUTE/PATH/TO/models/IQ2_XS/model-00007-of-00002.gguf"
+        self.assertEqual(cfg["args"][3], str(shard1))
+        self.assertEqual(cfg["args"][5], str(shard2))
+        self.assertEqual(cfg["args"][7], absent, "a shard not on this box is named, not invented")
+        self.assertIn("filled from the data area", note)
+        self.assertIn("fill in", note)
+        self.assertNotIn(".done", json.dumps(cfg), ".done is a marker, not the model")
+
+    def test_two_files_carrying_the_same_shard_are_not_a_guess(self) -> None:
+        project = self.root / "HyperCore-WebUI"
+        project.mkdir()
+        area = self.root / "Strata-data"
+        model = area / "models" / "IQ2_XS"
+        model.mkdir(parents=True)
+        (model / "a-00001-of-00002.gguf").write_text("m")
+        (model / "b-00001-of-00002.gguf").write_text("m")
+        (self.config / "run-q2_0.json").unlink()
+        template = {"exe": "engine/strata",
+                    "args": ["--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf"],
+                    "model_name": "q2_0", "log": "logs/strata-q2_0.log", "port": 8080}
+        (self.config / "run-example.json").write_text(json.dumps(template), encoding="utf-8")
+        saved = quant_store.ROOT
+        quant_store.ROOT = project
+        try:
+            path, note = quant_store.ensure_run_config("IQ2_XS")
+        finally:
+            quant_store.ROOT = saved
+        self.assertIsNotNone(path, note)
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        placeholder = "/ABSOLUTE/PATH/TO/models/IQ2_XS/model-00001-of-00002.gguf"
+        self.assertEqual(cfg["args"][1], placeholder, "two matches is not an answer")
+        self.assertIn("fill in", note)
+
     def test_an_existing_config_is_never_overwritten(self) -> None:
         path, note = quant_store.ensure_run_config("q2_0")
         self.assertEqual(path, self.config / "run-q2_0.json")
@@ -374,6 +439,21 @@ class RunConfigTests(unittest.TestCase):
         path2, note2 = quant_store.ensure_run_config("q2_0")
         self.assertIn("already points at this build", note2)
         self.assertEqual(path2, path)
+
+    def test_an_existing_config_still_named_by_a_placeholder_is_filled(self) -> None:
+        """A config written before the model files arrived is repaired on the next build."""
+        store = self._store("q2_0", b"the engine")
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf"]
+        (self.config / "run-q2_0.json").write_text(json.dumps(cfg), encoding="utf-8")
+        model = self.root / "Strata-data" / "models" / "Q2_0"
+        model.mkdir(parents=True)
+        (model / "Qwen3.8-Flash-Next-Q2_0-00001-of-00002.gguf").write_text("m")
+        path, note = quant_store.ensure_run_config("q2_0")
+        out = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(out["args"][1], str(model / "Qwen3.8-Flash-Next-Q2_0-00001-of-00002.gguf"))
+        self.assertIn("filled from the data area", note)
+        self.assertEqual(out["exe"], str(store / "strata"), "the engine path is still the build's")
 
     def test_a_log_written_outside_the_repository_is_moved_into_logs(self) -> None:
         cfg = json.loads(self.BASE)

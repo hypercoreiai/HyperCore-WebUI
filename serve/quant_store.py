@@ -604,7 +604,9 @@ def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | Non
       cwd   never the build scratch directory, which is deleted after the build
       log   inside logs/, so an engine never writes outside this repository
     Anything the config names under `source_root` (the clone the build ran in) is
-    copied into engine/engine_<quant>/data/ and rewritten. Returns what changed.
+    copied into engine/engine_<quant>/data/ and rewritten. A model path that belongs to
+    another install, or a placeholder the template left, is filled from this project's
+    data area: a path that exists is never overwritten. Returns what changed.
     """
     changes: list[str] = []
     built = store_dir(key)
@@ -633,9 +635,7 @@ def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | Non
         if moved:
             changes.append(f"{len(moved)} runtime file path(s) moved into engine/{built.name}/data")
 
-    repointed = repoint_data(cfg)
-    if repointed:
-        changes.append(f"{len(repointed)} model path(s) re-pointed at this project's data area")
+    changes += repair_model_paths(cfg, key)
     return changes
 
 
@@ -705,6 +705,27 @@ def _ci_join(base: Path, segments: list[str]) -> Path | None:
     return current
 
 
+#: The shard number a template placeholder and a real model file share: the template
+#: names `model-00001-of-00002.gguf`, the data area holds the same shard under the
+#: model's own name. The number is the part both carry, so it is the only thing a
+#: placeholder can be matched on.
+SHARD_RE = re.compile(r"\d{4,}-of-\d{4,}")
+
+
+def _shard_file(folder: Path, name: str) -> Path | None:
+    """The file in `folder` that carries the shard number `name` asks for.
+
+    Only one file can answer: two is not a guess, and a `.done` marker or any other
+    sidecar is not the model, so the extension has to match the one asked for.
+    """
+    match = SHARD_RE.search(name)
+    if match is None or not folder.is_dir():
+        return None
+    hits = [p for p in sorted(folder.iterdir())
+            if p.is_file() and match.group() in p.name and p.suffix == Path(name).suffix]
+    return hits[0] if len(hits) == 1 else None
+
+
 def fill_from_data(cfg: dict[str, Any], key: str) -> list[str]:
     """Fill the model paths of a run config from this project's data area.
 
@@ -736,7 +757,14 @@ def fill_from_data(cfg: dict[str, Any], key: str) -> list[str]:
         # this quant's own folder in the area first, then the shape the config named
         found = _ci_join(area, [marker, key] + rest) or _ci_join(area, [marker] + rest)
         if found is None or not found.exists():
-            return value
+            # the name the template wrote is a shape, not a file: match the shard it
+            # asks for against the files this quant's folder actually holds
+            folder = _ci_join(area, [marker, key]) or _ci_join(area, [marker])
+            if folder is None:
+                return value
+            found = _shard_file(folder, Path(head).name)
+            if found is None:
+                return value
         out = str(found) + (":" + tail if sep else "")
         changes.append(f"{value} -> {out}")
         return out
