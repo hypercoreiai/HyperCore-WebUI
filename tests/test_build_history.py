@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from build_history import (  # noqa: DTZ011
+from build_history import (
     PROJECT,
     chat_filename,
     clean,
@@ -55,6 +55,16 @@ class PathTests(unittest.TestCase):
     def test_relative_paths_in_the_repository_are_left_alone(self) -> None:
         for s in ("engine/strata", "config/run-q2_0.json", "serve/web/app.js"):
             self.assertEqual(relocate(s), s)
+
+    def test_an_approximation_sign_is_not_a_home_path(self) -> None:
+        # "~34%" is "about 34%", not a directory. It used to become
+        # "/home/ai-user0/34%", which is why the IPCC line in the history read as a path.
+        for s in ("a decline of ~34% (10-43%) by 2100", "about ~10 K", "a ~2 GB model",
+                  "run it in ~3 s", "the ~5% that failed"):
+            self.assertEqual(relocate(s), s, f"{s} was read as a path")
+        # A name after the tilde is still a home path.
+        self.assertEqual(relocate("~/black_box/serve"), str(PROJECT / "serve"))
+        self.assertEqual(relocate("~/Strata/data"), "/home/ai-user0/Strata/data")
 
     def test_trailing_punctuation_is_not_part_of_the_path(self) -> None:
         out = relocate("the file is at ~/black_box/tests/test_x.py.")
@@ -101,6 +111,14 @@ class SentenceTests(unittest.TestCase):
         self.assertEqual(kind("the sweep reached 61.4 tok/s on the 4090"), "numbers")
         self.assertEqual(kind("the archive button was wired to POST /history/archive"), "decisions")
         self.assertEqual(kind("`engine/strata` reads one pack per run"), "current")
+
+    def test_a_figure_from_outside_is_not_a_local_measurement(self) -> None:
+        self.assertEqual(kind("according to McKinsey's State of AI survey, 88% of organisations use AI"),
+                         "external")
+        self.assertEqual(kind("IPCC AR6 gives a likely decline of ~34% by 2100"), "external")
+        # Numbers this machine produced stay where they belong.
+        self.assertEqual(kind("the 40 ms fixture is deterministic, 10/10 runs"), "numbers")
+        self.assertEqual(kind("decode ran at 41.2 tok/s with 18.4 GB resident"), "numbers")
 
     def test_keys_and_handles_are_scrubbed(self) -> None:
         self.assertIn("[key]", clean("the key sk-abcdefghij123456 is in the config"))

@@ -57,6 +57,10 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   several models can turn it off once instead of in every config. The decision is a single
   function, `serve/server.py:resolve_turn_tail`, and the server says out loud when the switch
   overrode a request (`tests/test_turn_tail_check.py`).
+- **History builder, two determinism fixes**: `~34%` is an approximation, not a home path, so it
+  is no longer rewritten to `/home/ai-user0/34%`; and a figure a chat took from an outside source
+  is filed under "From outside this project" rather than "Measured on this machine", so the agent
+  does not report a survey percentage as a local measurement.
 - **Tool call cap**: `mcp.max_tool_calls` (default 500) bounds the tool calls a single
   request may run. `mcp.max_rounds` bounds the assistant turns that may emit calls, and
   one turn can emit several calls, so the round cap alone is not a call cap. Calls past

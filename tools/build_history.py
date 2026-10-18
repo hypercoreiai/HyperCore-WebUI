@@ -176,6 +176,11 @@ NOISE = re.compile(r"(?i)^(let me|let's|i will|i need|i should|i can|i'd|i have 
                   r"in other words, i|option \d|quick wins|say the word|"
                   r"it is worth|worth knowing|worth noting|worth trying)")
 QUESTION = re.compile(r"(?i)^(is|are|should|would|could|can|do|does|did|why|how|what|which|where|when|who|will)\b.*\?$")
+#: A figure a chat took from somewhere else. It is true of the world, not of this
+#: machine, and putting it under "Measured on this machine" makes the agent report a
+#: survey percentage as if it had run a benchmark.
+CITED = re.compile(r"(?i)\b(according to|survey|arxiv|ipcc|et al|the paper|the study|published|"
+                   r"mckinsey|the report by|wikipedia)\b")
 SKIP_LINE = re.compile(r"Traceback|File \"|line \d+|ResourceWarning|\.{5,}|\$ |did you mean|"
                        r"undefined reference|\[summary\]|^Usage:|\(see \"|Compiling|Building|\[\d+%\]|"
                        r"^warning:|^error:|^\s*$")
@@ -190,6 +195,8 @@ def kind(s: str) -> str:
     if re.search(r"(?i)(caution|warning|beware|do not|don't|never|must not|pitfall|gotcha|careful|"
                  r"trap|known gap|only if|unless)", low):
         return "gotchas"
+    if CITED.search(low):
+        return "external"
     if re.search(r"\d+(?:\.\d+)?\s*(tok/s|tokens/s|ms|gb|mib|gib|%)", low):
         return "numbers"
     if re.search(r"(?i)(fixed|patched|resolved|changed|replaced|added|removed|switched|renamed|moved|"
@@ -327,7 +334,10 @@ ALIASES = {
     "Q2_0": HOME / "Q2_0",
 }
 
-PATH = re.compile(r"(?<![\w/.-])(?:~|/home/[A-Za-z0-9_-]+)/?(?P<tail>[A-Za-z0-9_./-]+)")
+#: `~` is only a home path when a name follows it. `~34%`, `~10 K` and `~2 GB` are
+#: approximations, and reading the first as a path turned "a decline of ~34%" into
+#: "a decline of /home/ai-user0/34%".
+PATH = re.compile(r"(?<![\w/.-])(?:~(?=[A-Za-z/])|/home/[A-Za-z0-9_-]+)/?(?P<tail>[A-Za-z0-9_./-]+)")
 TRAIL = re.compile(r"[.,;)\]]+$")
 ALIAS_HEADS = sorted(ALIASES, key=len, reverse=True)
 BARE = re.compile(r"(?<![\w/.-])(?P<head>(?:" + "|".join(map(re.escape, ALIAS_HEADS)) + r"))"
@@ -547,6 +557,7 @@ SECTIONS = {
     "current": ("What is true now", "how the thing works, as the chats established it"),
     "decisions": ("Decisions taken", "what was chosen, and why, oldest first"),
     "numbers": ("Measured on this machine", "numbers actually measured, not estimated"),
+    "external": ("From outside this project", "figures a chat took from a source we did not run here; check the source before repeating one"),
     "gotchas": ("Gotchas", "things that bit once and will bite again"),
     "open": ("Still open", "not done, deferred, or waiting on a decision"),
 }
