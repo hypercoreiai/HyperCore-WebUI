@@ -94,6 +94,7 @@ from serve.engine_supervisor import (
     WorkerRejected,
     WorkerUnreachable,
     model_startup_s,
+    unique_socket_path,
 )
 from serve.ipc_parser import (
     STREAM_TERMINAL,
@@ -3884,6 +3885,9 @@ def make_handler(svc: Service):
                         ("<script>window.HYPERCORE_API_KEY = %s</script>\n<title>" % json.dumps(svc.api_key)).encode(), 1)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                # No validator and no freshness: a page whose tabs change when the server
+                # is restarted must never be served from a browser cache.
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -4117,7 +4121,7 @@ def make_handler(svc: Service):
                     if not release:
                         self._json(400, {"error": {"message": "no release found"}})
                         return
-                    result = build_api.JOB.fetch_prebuilt(release)
+                    result = build_api.JOB.fetch_prebuilt(release, req.get("quant"))
                     self._json(200 if result.get("ok") else 500, result)
                     return
                 if path == "/build/start":
@@ -5595,7 +5599,7 @@ def main() -> int:
                     help="enable POST /slots/0?action=save|restore {\"filename\": NAME} (llama-server's API): the "
                          "conversation the engine holds, to or from DIR/NAME (also \"slot_save_path\" in the config)")
     ap.add_argument("--worker", default=None, help="hypercore-worker binary; default build-shared/hypercore-worker")
-    ap.add_argument("--ipc-socket", default=None, help="UNIX socket path for the worker; default /tmp/hypercore-worker-<port>.sock")
+    ap.add_argument("--ipc-socket", default=None, help="UNIX socket path for the worker; default a namespaced /tmp/hypercore-worker-<pid>.sock")
     a = ap.parse_args()
     if a.config is None:              # no --config: the newest run config in config/, if there is one
         found = discover_config()
@@ -5765,7 +5769,7 @@ def main() -> int:
                 print(f"[hypercore] the web app is up anyway; the engine is retried in the "
                       f"background every {engine.retry_after_s:g} s.", flush=True)
         else:
-            socket_path = a.ipc_socket or cfg.get("ipc_socket") or f"/tmp/hypercore-worker-{a.port}.sock"
+            socket_path = a.ipc_socket or cfg.get("ipc_socket") or unique_socket_path("hypercore-worker")
             # A worker with no model binds its socket in milliseconds. A worker that has to load
             # weights - the pack, the expert arena, the VRAM tier - takes the "minute or two" the
             # run script warns about, and the default 30s would kill a healthy load. The config

@@ -1,5 +1,5 @@
 {
-  "source": "tmp/strata-main",
+  "source": "/home/ai-user0/HyperCore-WebUI/tmp/strata-v0.1.45",
   "project": "strata",
   "version": "0.1.45",
   "cmake_options": [
@@ -896,5 +896,14 @@
     "verify_batch_parity",
     "verify_parity",
     "vmm_test"
-  ]
+  ],
+  "changes": {
+    "from": "0.1.45",
+    "to": "0.1.45",
+    "added_options": [],
+    "removed_options": [],
+    "changed_defaults": [],
+    "added_flags": [],
+    "removed_flags": []
+  }
 }

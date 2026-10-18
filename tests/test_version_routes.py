@@ -37,6 +37,10 @@ class VersionRouteTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.port = free_port()
+        # These tests run against the real store, and selecting a version places that
+        # build's binaries at engine/strata. Remember what was running so the test does
+        # not leave the machine on a different engine than it started with.
+        self._active_before = quant_store.index().get("active")
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "serve.server", "--ui-only", "--no-attach",
              "--host", "127.0.0.1", "--port", str(self.port)],
@@ -50,6 +54,11 @@ class VersionRouteTests(unittest.TestCase):
                 self.proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        if self._active_before:
+            try:
+                quant_store.select(self._active_before)
+            except ValueError:
+                pass
 
     def wait_for_health(self) -> None:
         deadline = time.time() + self.STARTUP_S

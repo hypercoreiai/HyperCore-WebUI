@@ -2412,7 +2412,7 @@ $("assist-probe").onclick = async () => {   // time every model and re-pin the d
 };
 
 // ------------------------------------------------------------------ model versions
-// One engine build per quant, stored under engine/versions/<quant> by serve/quant_store.py.
+// One engine build per quant, stored in engine/engine_<quant>/ by serve/quant_store.py.
 // The header dropdown lists every version this machine can start; choosing one places that
 // build's binaries at engine/strata and restarts the engine with the run config that belongs
 // to it. GET /versions, POST /versions/select.
@@ -2561,7 +2561,8 @@ function renderTuneStatus(s) {
   $("tune-run").disabled = running;
   $("tune-note").hidden = !running;
   if (s.state === "idle") return;
-  $("view-tune .tune-progress").hidden = false;
+  const progress = $("tune-progress-card");
+  if (progress) progress.hidden = false;
   const pct = s.trials_total ? Math.min(100, (s.trials_done / s.trials_total) * 100) : 0;
   $("tune-bar-fill").style.width = pct + "%";
   $("tune-meta").textContent = `${s.trials_done}/${s.trials_total || "?"} trials in ${s.elapsed_s}s`;
@@ -2571,7 +2572,8 @@ function renderTuneStatus(s) {
     `<td>${esc(r.draft_floor)}</td><td>${esc(r.status)}</td><td>${r.gen_tok_s}</td>` +
     `<td>${r.prefill_tok_s}</td><td>${r.latency_ms}</td></tr>`).join("");
   $("tune-rows").innerHTML = rows;
-  $("view-tune .tune-results").hidden = !(s.rows && s.rows.length);
+  const results = $("tune-results-card");
+  if (results) results.hidden = !(s.rows && s.rows.length);
   if (s.best) {
     $("tune-best").innerHTML = `<strong>Best so far</strong> gen ${s.best.row.gen_tok_s} tok/s, ` +
       `prefill ${s.best.row.prefill_tok_s} tok/s, latency ${s.best.row.latency_ms} ms`;
@@ -2629,6 +2631,16 @@ function loadBuild() {
   }).catch((e) => {
     $("build-tag").innerHTML = `<option value="main">main (the current source)</option>`;
     $("build-update-note").textContent = `could not read the build status: ${String(e.message || e)}`;
+    // The choices card starts hidden and is only opened by renderBuildChoices. If the
+    // status call itself failed, nothing would open it and the tab would look like it
+    // has nothing to say about building, so say plainly why it is empty.
+    const card = $("build-choices");
+    if (!card) return;
+    card.hidden = false;
+    $("build-choices-tag").textContent = "this release";
+    $("build-choices-groups").innerHTML = "";
+    $("build-choices-rest").textContent = "The setup choices are not shown because the build status " +
+      "could not be read. Pick a release above to read that release's setup.py.";
   });
 }
 
@@ -2913,7 +2925,10 @@ function renderBuildOptions(options) {
 
 function renderBuildLog(job) {
   if (!job || job.state === "idle") return;
-  $("view-build .build-log").hidden = false;
+  // The card is addressed by id: $ is getElementById, so a CSS selector here would
+  // return null and throw, taking the whole Build tab render with it.
+  const logCard = $("build-log-card");
+  if (logCard) logCard.hidden = false;
   $("build-log").textContent = job.log.join("\n");
 }
 
@@ -2923,7 +2938,8 @@ let buildOffset = 0;
 async function pollBuildLog() {
   const s = await (await fetch(`build/log?offset=${buildOffset}`, { headers: headers() })).json();
   if (s.lines && s.lines.length) {
-    $("view-build .build-log").hidden = false;
+    const logCard = $("build-log-card");
+    if (logCard) logCard.hidden = false;
     $("build-log").textContent += s.lines.join("\n") + "\n";
   }
   buildOffset = s.offset || buildOffset;
@@ -2932,9 +2948,23 @@ async function pollBuildLog() {
 
 $("build-fetch").onclick = async () => {
   const r = await fetch("build/fetch-prebuilt", {
-    method: "POST", headers: headers(true), body: JSON.stringify({ tag: $("build-tag").value })});
+    method: "POST", headers: headers(true),
+    body: JSON.stringify({ tag: $("build-tag").value,
+                          quant: ($("build-quant") ? $("build-quant").value.trim() : "") })});
   const out = await r.json();
-  $("build-update-note").textContent = out.ok ? `Installed ${out.version}. Restart to use it.` : out.error;
+  if (out.ok && out.quant) {
+    $("build-update-note").textContent = `Installed ${out.version} as model version ${out.quant} in ${out.engine_dir}. ` +
+      "Pick it in the Model version dropdown at the top of the page.";
+    toast("success", "Engine installed", `${out.quant}: ${out.files.join(", ")}`);
+    await loadVersions();
+    const sel = $("version-select");
+    if (sel) sel.value = out.quant;
+  } else if (out.ok) {
+    $("build-update-note").textContent = `Installed ${out.version}. Restart to use it.`;
+    await loadVersions();
+  } else {
+    $("build-update-note").textContent = out.error;
+  }
   loadBuild();
 };
 $("build-start").onclick = async () => {
@@ -2957,7 +2987,21 @@ $("build-start").onclick = async () => {
   const poll = setInterval(async () => {
     const s = await pollBuildLog();
     renderBuildStatus(s, "source");
-    if (s.state === "done" || s.state === "failed" || s.state === "cancelled") { clearInterval(poll); loadBuild(); }
+    if (s.state === "done" || s.state === "failed" || s.state === "cancelled") {
+      clearInterval(poll);
+      loadBuild();
+      if (s.state === "done") {
+        // The build wrote its engine and its run config: the dropdown must show it,
+        // and the header can start it straight away.
+        await loadVersions();
+        const key = s.quant || (s.result && s.result.quant);
+        if (key) {
+          const sel = $("version-select");
+          if (sel) sel.value = key;
+          toast("success", "Model version built", `${key} is in the Model version dropdown. Choose it to start it.`);
+        }
+      }
+    }
   }, 3000);
 };
 

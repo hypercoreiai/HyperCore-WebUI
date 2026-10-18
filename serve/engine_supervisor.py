@@ -113,7 +113,13 @@ def model_startup_s(cfg: dict) -> float:
 #   2. whatever sits at the path is removed before the worker is spawned, and the name is
 #      removed again when the supervisor stops.
 def unique_socket_path(prefix: str = "hypercore") -> str:
-    """A socket path no other process on this machine can already be holding."""
+    """A socket path no other process on this machine can already be holding.
+
+    /tmp is used on purpose: this is a live IPC endpoint, not a file a build produces,
+    and the runtime modules are contractually not allowed to read the project's tmp/,
+    which is deleted when a build finishes. The socket and its side file are unlinked
+    when the supervisor stops.
+    """
     return f"/tmp/{prefix}-{os.getpid()}-{os.urandom(4).hex()}.sock"
 
 

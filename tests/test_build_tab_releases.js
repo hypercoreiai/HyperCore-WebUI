@@ -140,6 +140,11 @@ async function main() {
   check(dom["build-tag"].innerHTML.includes('value="main"'), "a failed request leaves the dropdown empty");
   check(dom["build-update-note"].textContent.includes("could not read the build status"),
         "a failed request is not reported");
+  // The setup-choices card is hidden until renderBuildChoices opens it. A failed status
+  // call must not leave it hidden: the tab would look like it has no build controls at all.
+  check(dom["build-choices"].hidden === false, "a failed status call leaves the setup-choices card hidden");
+  check(dom["build-choices-rest"].textContent.includes("could not be read"),
+        "the empty setup-choices card gives no reason for being empty");
 
   // e) a build is already running: loadBuild feeds its state to the status card
   const running = status({ version: "0.1.44", source: "local", worker: true },

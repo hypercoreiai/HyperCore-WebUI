@@ -33,8 +33,8 @@
     <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-info"/></svg>About</button>
   </nav>
-  <!-- Which model version to run: every engine build stored under engine/versions/<quant>
-     and every run config that names a quant (serve/quant_store.py, GET /versions).
+  <!-- Which model version to run: every engine build in engine/engine_<quant> and every
+     run config that names a quant (serve/quant_store.py, GET /versions).
      Choosing one places that build's binaries at engine/strata and restarts the engine. -->
   <label class="st-version" for="version-select"
          title="Start one of the model versions this machine has an engine built for">
@@ -337,13 +337,13 @@
       </div>
     </div>
 
-    <div class="st-card tune-progress" hidden>
+    <div class="st-card tune-progress" id="tune-progress-card" hidden>
       <span class="card-title">Progress</span>
       <div class="tune-bar"><div id="tune-bar-fill"></div></div>
       <span class="muted small" id="tune-meta"></span>
     </div>
 
-    <div class="st-card tune-results" hidden>
+    <div class="st-card tune-results" id="tune-results-card" hidden>
       <span class="card-title">Results</span>
       <div class="tune-best" id="tune-best"></div>
       <table class="tune-table" id="tune-table">
@@ -358,30 +358,6 @@
 
   <!-- ============================ Build ============================ -->
   <section class="view view--build" id="view-build" role="tabpanel" aria-labelledby="tab-btn-build" hidden>
-    <div class="st-card build-status">
-      <span class="card-title">Engine</span>
-      <dl class="facts" id="build-installed"></dl>
-      <p class="muted small" id="build-update-note"></p>
-    </div>
-
-    <div class="st-card build-releases">
-      <span class="card-title">Available releases</span>
-      <select id="build-tag"></select>
-      <!-- A build named by quant is stored under engine/versions/<quant> and can then be
-         started from the Model version dropdown. Left empty, it is the default engine. -->
-      <label class="build-quant" for="build-quant">
-        <span class="muted small">Build for quant</span>
-        <input id="build-quant" type="text" placeholder="q2_0" autocomplete="off" spellcheck="false"
-               title="Store this engine under engine/versions/&lt;quant&gt;. Leave empty for the default engine.">
-      </label>
-      <div class="build-actions">
-        <button class="st-btn st-btn--primary" id="build-fetch" type="button">Install ready-made engine</button>
-        <button class="st-btn" id="build-start" type="button">Clone and build from source</button>
-      </div>
-      <p class="muted small">The ready-made engine is a prebuilt archive for this operating system.
-        Building from source takes 10-20 minutes and lets you choose the options below.</p>
-    </div>
-
     <!-- The model and engine choices a release's setup.py accepts, read from that
          release's own setup.py before anything is cloned or built. -->
     <div class="st-card build-choices" id="build-choices" hidden>
@@ -412,6 +388,25 @@
       <pre id="build-choices-command" class="build-command"></pre>
     </div>
 
+    <div class="st-card build-releases">
+      <span class="card-title">Available releases</span>
+      <select id="build-tag"></select>
+      <!-- A build named by quant is stored in engine/engine_<quant> with its own run
+         config, and can then be started from the Model version dropdown. Left empty, it
+         is the default engine in engine/. -->
+      <label class="build-quant" for="build-quant">
+        <span class="muted small">Build for quant</span>
+        <input id="build-quant" type="text" placeholder="q2_0" autocomplete="off" spellcheck="false"
+               title="Store this engine in engine/engine_&lt;quant&gt; and write config/run-&lt;quant&gt;.json for it. Leave empty for the default engine.">
+      </label>
+      <div class="build-actions">
+        <button class="st-btn st-btn--primary" id="build-fetch" type="button">Install ready-made engine</button>
+        <button class="st-btn" id="build-start" type="button">Clone and build from source</button>
+      </div>
+      <p class="muted small">The ready-made engine is a prebuilt archive for this operating system.
+        Building from source takes 10-20 minutes and lets you choose the options below.</p>
+    </div>
+
     <div class="st-card build-options">
       <span class="card-title">Build options</span>
       <p class="muted small">Read from the cloned release's CMakeLists.txt and setup.py, not from a list
@@ -420,9 +415,15 @@
       <div id="build-changes" hidden></div>
     </div>
 
-    <div class="st-card build-log" hidden>
+    <div class="st-card build-log" id="build-log-card" hidden>
       <span class="card-title">Build log</span>
       <pre id="build-log"></pre>
+    </div>
+
+    <div class="st-card build-status">
+      <span class="card-title">Engine</span>
+      <dl class="facts" id="build-installed"></dl>
+      <p class="muted small" id="build-update-note"></p>
     </div>
   </section>
 

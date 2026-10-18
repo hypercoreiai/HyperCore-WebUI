@@ -135,9 +135,10 @@ installed, only to find a new release.
   manifest so a new release's new options appear here automatically.
 - **Build log** streams while the compile runs. `tmp/` holds one clone and is deleted when
   the build finishes.
-- **Build for quant**: naming a quant (q2_0, IQ2_S, Q4_K_M) stores that engine under
-  `engine/versions/<quant>/` instead of overwriting the engine in `engine/`, so a
-  second quant can be built without losing the first. See *Model versions* below.
+- **Build for quant**: naming a quant (q2_0, IQ2_S, Q4_K_M) stores that engine in
+  `engine/engine_<quant>/` and writes `config/run-<quant>.json` for it, instead of
+  overwriting the engine in `engine/`, so a second quant can be built without losing
+  the first. See *Model versions* below.
 
 ![The Build tab: installed version, the release picker, the build options and the log](data/media/build_5.png)
 
@@ -259,21 +260,30 @@ The retry then holds off for as long as that sweep runs.
 ## How the Build tab works
 
 1. Reads the installed version from `engine/BUILD.json`, or from the
-   `engine=X.Y.Z` string compiled into the binary.
+   `engine=X.Y.Z` string compiled into the binary, and shows it in the **Engine** card,
+   which is the last card on the tab (the setup choices card is the first, since a build
+   is planned from `setup.py` before anything is cloned or built).
 2. Queries the GitHub releases API for `Niko1221/Strata`. The dropdown lists those
    releases with `main (the current source)` at the end: `main` is what
    `tools/build_engine.sh` builds when no tag is given, so the box is never empty,
    even with no network.
 3. Either downloads the ready-made archive for this OS and verifies its published
    SHA-256, or shallow-clones the release into `tmp/`, builds it, and copies the
-   binaries into `engine/`. One cmake invocation builds all three targets
-   (`strata`, `strata-vision`, `hypercore-worker`); if the worker target is what
-   fails, the engine and the vision engine are still built and the fallback is
-   recorded in `engine/BUILD.json` as `"worker": false`.
+   binaries into `engine/`. The build is configured for the machine it is running on:
+   `serve/build_api.py` finds the CUDA toolkit (`nvcc` on PATH or `/usr/local/cuda*`),
+   the GPU's compute capability, and offers `STRATA_ENABLE_CUDA=ON`,
+   `CMAKE_CUDA_ARCHITECTURES=<the card>` and `CMAKE_CUDA_COMPILER=<that nvcc>` as the
+   defaults in the option grid. Upstream defines the `strata` executable only when a GPU
+   backend is on, so a configuration with none is named before cmake runs instead of
+   failing in ninja. `hypercore-worker` comes from `engine-src/`, which the tab adds to
+   the clone's project with `add_subdirectory(hypercore-interface)`; the image encoder is
+   upstream's own project and is configured and built in `build-vision/`. If the worker is
+   what fails, the engine is still built and the fallback is recorded in
+   `engine/BUILD.json` as `"worker": false`.
 4. The build dropdowns are extracted from the cloned release's own
    `CMakeLists.txt` and `setup.py` by `tools/extract_build_options.py`, and
    diffed against the previous manifest so the tab can show what changed.
-5. The **Setup choices** card under the release picker reads the selected release's own
+5. The **Setup choices** card, the top card of the tab, reads the selected release's own
    `setup.py` (a raw file fetch, no clone) and lists the model, quant, context, KV cache,
    image and experimental flags before anything is downloaded or built. `Run setup with
    these` starts that setup in the background; while it runs the button reads **Kill
@@ -295,20 +305,34 @@ MMQ prompt kernels (`STRATA_MMQ_KQUANTS`), an IQ2_S or IQ3_S expert model wants 
 IQ experts (`STRATA_NATIVE_EXPERTS`), a plain q2_0 pack wants neither. Building once for
 "whatever is on the box" means changing quant later means rebuilding.
 
-So a build is kept under the quant it was configured for:
+So a build is kept in a folder named for the quant it was configured for:
 
 ```text
 engine/
   BUILD.json              the active build, as before
   VERSIONS.json           {"active": "q2_0", "versions": {"q2_0": {...}}}
-  versions/q2_0/strata    the binaries for that quant
-  versions/q2_0/BUILD.json
-  strata                  the active binaries, materialised from versions/<active>
+  engine_q2_0/          one folder per engine build
+    strata              the engine
+    strata-vision       the image encoder, when one was built
+    libstrata_kq.so     the K-quant kernels the engine dlopen's next to itself
+    data/               runtime files the build ships (expert-profile.bin, ...)
+    BUILD.json          what this build is
+  strata                  the active engine, symlinked at the build above
 ```
 
 `engine/strata` is a symlink on Linux and a copy on Windows, which is why nothing else
-has to change: every run config still says `engine/strata`, and pointing it at the
-selected quant is what the **Model version** dropdown in the header does.
+has to change: every run config written before this still says `engine/strata`, and
+pointing it at the selected quant is what the **Model version** dropdown in the header
+does. A run config the Build tab writes points at `engine/engine_<quant>/strata`
+directly.
+
+Everything a build produces stays inside this repository: the clone and the cmake build
+in `tmp/`, the binaries in `engine/engine_<quant>/`, the run config in `config/`, the
+engine log in `logs/`. Model weights and tokeniser packs are inputs you installed
+elsewhere; the app reads them and never writes to them. A path in a run config that
+pointed into `tmp/` (a build's `data/expert-profile.bin`, for example) is copied into
+`engine/engine_<quant>/data/` and rewritten, because `tmp/` is deleted when the build
+finishes.
 
 - The dropdown lists every quant with a stored build, plus every `config/run-*.json`
   that names a quant and uses the engine already in `engine/` (the template
@@ -317,9 +341,15 @@ selected quant is what the **Model version** dropdown in the header does.
   {"version": "q2_0"}` places that build's binaries, points the engine at its run
   config, and restarts it. A switch that fails is reported, and the app keeps serving.
 - `serve/quant_store.py` is the store. `VERSIONS.json` is bookkeeping only: if it is
-  missing or corrupt it is rebuilt by scanning `engine/versions/` and `config/`, and the
-  active build is recognised by comparing the digest of `engine/strata` with what is
-  stored.
+  missing or corrupt it is rebuilt by scanning the engine folders in `engine/` (the older
+  `engine/versions/<quant>/` layout is read as well) and `config/`, and the active build
+  is recognised by comparing the digest of `engine/strata` with what is stored.
+- A build named for a quant also writes `config/run-<quant>.json` when none names that
+  quant: the nearest run config with the quant in its paths, model name and log rewritten,
+  and a `_note` naming every path that is not on this box yet. When the config already
+  exists it is not replaced, only repointed: its `exe` to the new engine, its `log` into
+  `logs/`, its `cwd` out of `tmp/`, and any runtime file it names inside the build clone
+  into `engine/engine_<quant>/data/`.
 
 Build one per quant from the Build tab (the *Build for quant* field next to the release
 picker), then start whichever you want from the header.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -306,13 +307,13 @@ class TransferTests(unittest.TestCase):
         copied, key = self.job.transfer_binaries(self.build_dir, self.meta, "IQ2_S")
         self.assertEqual(key, "iq2_s")
         self.assertEqual(sorted(copied), ["hypercore-worker", "strata"])
-        stored = quant_store.VERSIONS_DIR / "iq2_s"
+        stored = quant_store.store_dir("iq2_s")
         self.assertTrue((stored / "strata").is_file())
         self.assertTrue((stored / "BUILD.json").is_file())
         self.assertTrue((quant_store.ENGINE_DIR / "strata").is_file())
         self.assertEqual((quant_store.ENGINE_DIR / "strata").read_bytes(), b"engine binary")
         self.assertEqual(quant_store.index()["active"], "iq2_s")
-        self.assertIn("stored engine/versions/iq2_s", "\n".join(self.job.log))
+        self.assertIn("stored engine/engine_iq2_s", "\n".join(self.job.log))
         meta = json.loads((quant_store.ENGINE_DIR / "BUILD.json").read_text(encoding="utf-8"))
         self.assertEqual(meta["quant"], "iq2_s")
 
@@ -322,8 +323,8 @@ class TransferTests(unittest.TestCase):
         other.mkdir()
         (other / "strata").write_bytes(b"iq2 engine")
         self.job.transfer_binaries(other, self.meta, "IQ2_S")
-        self.assertEqual((quant_store.VERSIONS_DIR / "q2_0" / "strata").read_bytes(), b"engine binary")
-        self.assertEqual((quant_store.VERSIONS_DIR / "iq2_s" / "strata").read_bytes(), b"iq2 engine")
+        self.assertEqual((quant_store.store_dir("q2_0") / "strata").read_bytes(), b"engine binary")
+        self.assertEqual((quant_store.store_dir("iq2_s") / "strata").read_bytes(), b"iq2 engine")
         self.assertEqual(sorted(quant_store.index()["versions"]), ["iq2_s", "q2_0"])
         self.assertEqual(quant_store.index()["active"], "iq2_s")
 
@@ -332,7 +333,9 @@ class TransferTests(unittest.TestCase):
         self.assertIsNone(key)
         self.assertEqual(sorted(copied), ["hypercore-worker", "strata"])
         self.assertTrue((build_api.ENGINE_DIR / "strata").is_file())
-        self.assertFalse(quant_store.VERSIONS_DIR.exists())
+        self.assertFalse([p for p in build_api.ENGINE_DIR.iterdir()
+                         if p.name.startswith(quant_store.STORE_PREFIX)],
+                        "a build with no quant named must not create a version folder")
         self.assertEqual(json.loads((build_api.ENGINE_DIR / "BUILD.json").read_text())["version"], "0.1.45")
 
     def test_a_bad_quant_name_is_not_fatal(self) -> None:
@@ -342,11 +345,370 @@ class TransferTests(unittest.TestCase):
         self.assertTrue((build_api.ENGINE_DIR / "strata").is_file())
         self.assertIn("is not a valid name", "\n".join(self.job.log))
 
+    def test_a_prebuilt_engine_is_installed_as_a_model_version(self) -> None:
+        import io
+        import zipfile
+        blob = io.BytesIO()
+        with zipfile.ZipFile(blob, "w") as zf:
+            zf.writestr("strata", b"ready engine")
+            zf.writestr("libstrata_kq.so", b"kernels")
+        blob = blob.getvalue()
+        digest = __import__("hashlib").sha256(blob).hexdigest()
+
+        real_tmp, real_urlretrieve, real_assets, real_digests = (
+            build_api.TMP_DIR, build_api.urllib.request.urlretrieve,
+            build_api.asset_for, build_api.published_digests)
+        build_api.TMP_DIR = self.tmp / "scratch"
+        build_api.urllib.request.urlretrieve = lambda url, dest: Path(dest).write_bytes(blob)
+        build_api.asset_for = lambda r: {"name": "strata-linux-x64.zip", "url": "file://x"}
+        build_api.published_digests = lambda r: {"strata-linux-x64.zip": digest}
+        try:
+            out = BuildJob().fetch_prebuilt({"version": "0.1.46", "tag": "v0.1.46"}, "IQ2_XS")
+            self.assertTrue(out["ok"], out.get("error"))
+            self.assertEqual(sorted(out["files"]), ["libstrata_kq.so", "strata"])
+            self.assertEqual(out["engine_dir"], str(quant_store.store_dir("iq2_xs")))
+            self.assertTrue((quant_store.store_dir("iq2_xs") / "libstrata_kq.so").is_file())
+            self.assertTrue((quant_store.ENGINE_DIR / "strata").is_file())
+            self.assertEqual(quant_store.index()["active"], "iq2_xs")
+            self.assertFalse((build_api.TMP_DIR / "strata-linux-x64.zip").exists(),
+                            "the downloaded archive is left in the scratch folder")
+        finally:
+            build_api.TMP_DIR, build_api.urllib.request.urlretrieve, \
+                build_api.asset_for, build_api.published_digests = \
+                real_tmp, real_urlretrieve, real_assets, real_digests
+
     def test_the_quant_is_reported_in_the_job_status(self) -> None:
         job = BuildJob()
         job.quant = build_api.normalise_or_none("Q4_K_M")
         self.assertEqual(job.status()["quant"], "q4_k_m")
         self.assertIsNone(BuildJob().status()["quant"])
+
+
+class DeviceTests(unittest.TestCase):
+    """The Build tab's defaults are the ones this machine can build.
+
+    Upstream defaults every GPU backend to OFF, and with all three off the release
+    defines no `strata` target at all: a build started from those defaults fails with
+    ninja's "unknown target 'strata'" and puts nothing in engine/. The probes are
+    stubbed here, so the test says what the code does with a device rather than what
+    this machine happens to have.
+    """
+
+    def setUp(self) -> None:
+        self.saved = (build_api.cuda_toolkit, build_api.cuda_arch, build_api.shutil.which)
+        build_api.cuda_toolkit = lambda: "/usr/local/cuda-13.4/bin"
+        build_api.cuda_arch = lambda: "89"
+        build_api.shutil.which = lambda name: None
+
+    def tearDown(self) -> None:
+        build_api.cuda_toolkit, build_api.cuda_arch, build_api.shutil.which = self.saved
+
+    def test_a_cuda_box_defaults_to_a_gpu_build(self) -> None:
+        device = build_api.device_defaults()
+        self.assertEqual(device["device"], "cuda")
+        self.assertEqual(device["defs"], {"STRATA_ENABLE_CUDA": "ON",
+                                         "CMAKE_CUDA_ARCHITECTURES": "89",
+                                         "CMAKE_CUDA_COMPILER": "/usr/local/cuda-13.4/bin/nvcc"},
+                         "a toolkit that is not on PATH has to be named for CMake to find it")
+        self.assertEqual(build_api.device_label(device),
+                         "CUDA toolkit at /usr/local/cuda-13.4/bin, GPU arch 89")
+
+    def test_the_manifest_the_tab_shows_carries_those_defaults(self) -> None:
+        options = {"cmake_options": [{"name": "STRATA_ENABLE_CUDA", "kind": "bool",
+                                     "default": "OFF", "help": "Build the CUDA targets",
+                                     "visible": True}]}
+        shown = build_api.with_device_defaults(options)
+        self.assertEqual(shown["device"]["device"], "cuda")
+        cuda = next(o for o in shown["cmake_options"] if o["name"] == "STRATA_ENABLE_CUDA")
+        self.assertEqual(cuda["default"], "ON")
+        arch = next(o for o in shown["cmake_options"] if o["name"] == "CMAKE_CUDA_ARCHITECTURES")
+        self.assertEqual(arch["default"], "89")
+        self.assertTrue(arch["visible"], "the arch is a choice the user can see and change")
+        compiler = next(o for o in shown["cmake_options"] if o["name"] == "CMAKE_CUDA_COMPILER")
+        self.assertFalse(compiler["visible"], "the toolkit path is filled in, not chosen")
+        self.assertEqual(options["cmake_options"][0]["default"], "OFF",
+                         "the caller's manifest is not mutated")
+
+    def test_no_toolchain_is_said_plainly(self) -> None:
+        build_api.cuda_toolkit = lambda: ""
+        device = build_api.device_defaults()
+        self.assertEqual(device["device"], "none")
+        self.assertEqual(device["defs"], {})
+        self.assertIn("no CUDA, HIP or oneAPI", build_api.device_label(device))
+        shown = build_api.with_device_defaults({"cmake_options": []})
+        self.assertEqual(shown["cmake_options"], [])
+
+    def test_a_hip_box_defaults_to_the_hip_backend(self) -> None:
+        build_api.cuda_toolkit = lambda: ""
+        build_api.shutil.which = lambda name: "/usr/bin/hipcc" if name == "hipcc" else None
+        device = build_api.device_defaults()
+        self.assertEqual(device["device"], "hip")
+        self.assertEqual(device["defs"], {"STRATA_ENABLE_HIP": "ON"})
+
+    def test_a_feature_the_backend_cannot_build_is_off_before_cmake(self) -> None:
+        """Upstream's CMakeLists.txt FATAL_ERRORs on STRATA_PREFILL_MMQ without HIP
+        (v0.1.45 CMakeLists.txt:97), so a CUDA box must never be shown that switch on.
+        """
+        options = {"cmake_options": [
+            {"name": "STRATA_ENABLE_CUDA", "kind": "bool", "default": "OFF",
+             "help": "Build the CUDA targets", "visible": True},
+            {"name": "STRATA_PREFILL_MMQ", "kind": "bool", "default": "ON",
+             "help": "Build the optional GGML MMQ prefill path for HIP", "visible": True},
+            {"name": "STRATA_MMQ_TAB", "kind": "bool", "default": "ON",
+             "help": "Build the pointer-table prompt MMQ", "visible": True},
+        ]}
+        shown = build_api.with_device_defaults(options)
+        by_name = {o["name"]: o for o in shown["cmake_options"]}
+        self.assertEqual(by_name["STRATA_PREFILL_MMQ"]["default"], "OFF",
+                         "cmake would refuse this configuration before compiling anything")
+        self.assertIn("STRATA_ENABLE_HIP=ON", by_name["STRATA_PREFILL_MMQ"]["help"],
+                     "the tab has to say why the switch is off, not just show it off")
+        self.assertEqual(by_name["STRATA_MMQ_TAB"]["default"], "ON",
+                         "the pointer table is a CUDA target, so a CUDA box can build it")
+        self.assertEqual(options["cmake_options"][1]["default"], "ON",
+                         "the manifest the caller passed is not mutated")
+
+    def test_a_hip_box_keeps_the_hip_only_feature(self) -> None:
+        build_api.cuda_toolkit = lambda: ""
+        build_api.shutil.which = lambda name: "/usr/bin/hipcc" if name == "hipcc" else None
+        options = {"cmake_options": [
+            {"name": "STRATA_ENABLE_HIP", "kind": "bool", "default": "OFF",
+             "help": "Build the HIP targets", "visible": True},
+            {"name": "STRATA_NATIVE_EXPERTS", "kind": "bool", "default": "ON",
+             "help": "Native (IQ) expert support through ggml-cpu", "visible": True},
+            {"name": "STRATA_PREFILL_MMQ", "kind": "bool", "default": "ON",
+             "help": "Build the optional GGML MMQ prefill path for HIP", "visible": True},
+            {"name": "STRATA_MMQ_TAB", "kind": "bool", "default": "ON",
+             "help": "Build the pointer-table prompt MMQ", "visible": True},
+        ]}
+        by_name = {o["name"]: o for o in build_api.with_device_defaults(options)["cmake_options"]}
+        self.assertEqual(by_name["STRATA_PREFILL_MMQ"]["default"], "ON")
+        self.assertEqual(by_name["STRATA_MMQ_TAB"]["default"], "OFF",
+                         "there is no CUDA target to build the pointer table from")
+
+
+class BackendRuleTests(unittest.TestCase):
+    """The rules themselves, independent of what the probes find on the box."""
+
+    CUDA: ClassVar[dict[str, Any]] = {"device": "cuda", "defs": {"STRATA_ENABLE_CUDA": "ON"}}
+
+    def test_a_hip_only_option_is_off_on_a_cuda_box(self) -> None:
+        defs, notes = build_api.resolve_build_options(
+            {"STRATA_ENABLE_CUDA": "ON", "STRATA_ENABLE_HIP": "OFF",
+             "STRATA_NATIVE_EXPERTS": "ON", "STRATA_PREFILL_MMQ": "ON"}, self.CUDA)
+        self.assertEqual(defs["STRATA_PREFILL_MMQ"], "OFF")
+        self.assertEqual(len(notes), 1)
+        self.assertIn("STRATA_ENABLE_HIP=ON", notes[0])
+
+    def test_an_option_needs_every_flag_it_requires(self) -> None:
+        defs, notes = build_api.resolve_build_options(
+            {"STRATA_ENABLE_HIP": "ON", "STRATA_NATIVE_EXPERTS": "OFF",
+             "STRATA_PREFILL_MMQ": "ON"}, {"device": "hip", "defs": {"STRATA_ENABLE_HIP": "ON"}})
+        self.assertEqual(defs["STRATA_PREFILL_MMQ"], "OFF")
+        self.assertIn("STRATA_NATIVE_EXPERTS=ON", notes[0])
+
+    def test_two_backends_are_not_sent_to_cmake(self) -> None:
+        defs, notes = build_api.resolve_build_options(
+            {"STRATA_ENABLE_CUDA": "ON", "STRATA_ENABLE_HIP": "ON"}, self.CUDA)
+        self.assertEqual(defs["STRATA_ENABLE_HIP"], "OFF",
+                         "upstream refuses CUDA and HIP in the same configure")
+        self.assertEqual(defs["STRATA_ENABLE_CUDA"], "ON")
+        self.assertIn("one backend at a time", notes[0])
+
+    def test_a_valid_configuration_is_left_alone(self) -> None:
+        defs = {"STRATA_ENABLE_CUDA": "ON", "CMAKE_CUDA_ARCHITECTURES": "89",
+                "STRATA_MMQ_KQUANTS": "ON", "STRATA_NATIVE_EXPERTS": "ON",
+                "STRATA_PREFILL_MMQ": "OFF", "STRATA_Q6K_EXPERTS": "ON"}
+        resolved, notes = build_api.resolve_build_options(defs, self.CUDA)
+        self.assertEqual(resolved, defs)
+        self.assertEqual(notes, [])
+
+    def test_an_empty_value_is_off_not_a_backend(self) -> None:
+        defs, notes = build_api.resolve_build_options(
+            {"STRATA_ENABLE_CUDA": "", "STRATA_PREFILL_MMQ": "ON"}, self.CUDA)
+        self.assertEqual(defs["STRATA_PREFILL_MMQ"], "OFF")
+        self.assertEqual(len(notes), 1)
+
+
+class EngineTargetTests(unittest.TestCase):
+    """A build is only started when the configuration has an engine in it.
+
+    The pre-flight reads the project ninja file: a configuration with no GPU backend
+    has no `strata` rule, and saying so before running cmake is more useful than a
+    ninja error and a dead build.
+    """
+
+    NINJA = "build strata: CXX_EXECUTABLE_LINKER__strata\nbuild strata-vision: link\n"
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved = (build_api.cuda_toolkit, build_api.cuda_arch, build_api.shutil.which)
+        build_api.cuda_toolkit = lambda: ""
+        build_api.cuda_arch = lambda: ""
+        build_api.shutil.which = lambda name: None
+        self.job = StubBuild([0])
+
+    def tearDown(self) -> None:
+        build_api.cuda_toolkit, build_api.cuda_arch, build_api.shutil.which = self.saved
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_targets_are_read_from_the_configured_project(self) -> None:
+        (self.tmp / "build.ninja").write_text(self.NINJA, encoding="utf-8")
+        self.assertEqual(self.job.configured_targets(self.tmp), {"strata", "strata-vision"})
+
+    def test_a_configuration_with_no_engine_is_named_before_cmake_runs(self) -> None:
+        (self.tmp / "build.ninja").write_text("build ggml: compile\n", encoding="utf-8")
+        with self.assertRaises(RuntimeError) as caught:
+            self.job.build_targets(self.tmp)
+        message = str(caught.exception)
+        self.assertIn("no engine target", message)
+        self.assertIn("STRATA_ENABLE_CUDA", message)
+        self.assertEqual(self.job.calls, [], "cmake was never run against a build with no engine")
+
+    def test_only_the_targets_that_exist_are_requested(self) -> None:
+        (self.tmp / "build.ninja").write_text(
+            "build strata: link\nbuild hypercore-worker: link\n", encoding="utf-8")
+        self.assertTrue(self.job.build_targets(self.tmp))
+        self.assertEqual(targets_of(self.job.calls[0]), ["strata", "hypercore-worker"])
+        self.assertIn("no strata-vision target", "\n".join(self.job.log))
+
+    def test_an_unreadable_project_falls_back_to_the_upstream_names(self) -> None:
+        self.assertTrue(self.job.build_targets(self.tmp / "no-such-build"))
+        self.assertEqual(targets_of(self.job.calls[0]),
+                        ["strata", "strata-vision", "hypercore-worker"])
+
+    def test_a_worker_built_as_a_subproject_is_still_found(self) -> None:
+        build = self.tmp / "b"
+        (build / "hypercore-interface").mkdir(parents=True)
+        (build / "strata").write_bytes(b"engine")
+        (build / "hypercore-interface" / "hypercore-worker").write_bytes(b"worker")
+        found = BuildJob().built_binaries(build)
+        self.assertEqual(sorted(p.name for p in found), ["hypercore-worker", "strata"],
+                         "ninja puts a subproject's executable under its own folder")
+
+    def test_a_build_that_produces_no_binary_is_not_stored_as_a_version(self) -> None:
+        empty = self.tmp / "empty-build"
+        empty.mkdir()
+        with self.assertRaises(RuntimeError) as caught:
+            BuildJob().transfer_binaries(empty, {"version": "0.1.45"}, "iq2_xs")
+        self.assertIn("no engine binary", str(caught.exception))
+
+    def test_the_shared_kernels_a_build_links_are_found_with_the_engine(self) -> None:
+        build = self.tmp / "b2"
+        (build / "hypercore-interface").mkdir(parents=True)
+        (build / "strata").write_bytes(b"engine")
+        (build / "libstrata_kq.so").write_bytes(b"kernels")
+        (build / "libstrata_core.a").write_bytes(b"static, not loaded at run time")
+        (build / "hypercore-interface" / "libhypercore_api.so").write_bytes(b"worker library")
+        found = sorted(p.name for p in BuildJob().built_binaries(build))
+        self.assertEqual(found, ["libhypercore_api.so", "libstrata_kq.so", "strata"],
+                        "the shared libraries a build produces must travel with the engine")
+
+
+class VisionBuildTests(unittest.TestCase):
+    """The image encoder is upstream's own project, and its failure is not fatal.
+
+    tools/vision is not a subdirectory of the engine's CMakeLists.txt, so the Build tab
+    configures and builds it separately. A release without it, or a vision build that
+    fails, still produces an engine.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.clone = self.tmp / "clone"
+        (self.clone / "tools" / "vision").mkdir(parents=True)
+        (self.clone / "tools" / "vision" / "CMakeLists.txt").write_text("project(vision)", encoding="utf-8")
+        self.saved = (build_api.cuda_toolkit, build_api.cuda_arch, build_api.shutil.which,
+                      quant_store.ENGINE_DIR, quant_store.VERSIONS_DIR,
+                      quant_store.INDEX_PATH, quant_store.CONFIG_DIR)
+        build_api.cuda_toolkit = lambda: ""
+        build_api.cuda_arch = lambda: ""
+        build_api.shutil.which = lambda name: None
+        quant_store.ENGINE_DIR = self.tmp / "engine"
+        quant_store.VERSIONS_DIR = quant_store.ENGINE_DIR / "versions"
+        quant_store.INDEX_PATH = quant_store.ENGINE_DIR / "VERSIONS.json"
+        quant_store.CONFIG_DIR = self.tmp / "config"
+        self.job = StubBuild([0, 0])
+
+    def tearDown(self) -> None:
+        build_api.cuda_toolkit, build_api.cuda_arch, build_api.shutil.which, \
+            quant_store.ENGINE_DIR, quant_store.VERSIONS_DIR, quant_store.INDEX_PATH, \
+            quant_store.CONFIG_DIR = self.saved
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_llama_source_is_the_one_the_clone_has(self) -> None:
+        vendored = self.clone / "third_party" / "llama.cpp"
+        vendored.mkdir(parents=True)
+        (vendored / "CMakeLists.txt").write_text("project(llama)", encoding="utf-8")
+        self.assertEqual(build_api._llama_source(self.clone), vendored)
+        shutil.rmtree(vendored)
+        fetched = self.clone / "build" / "_deps" / "strata_llamacpp-src"
+        fetched.mkdir(parents=True)
+        (fetched / "CMakeLists.txt").write_text("project(llama)", encoding="utf-8")
+        self.assertEqual(build_api._llama_source(self.clone), fetched,
+                         "a fresh clone fetches llama.cpp into build/_deps")
+
+    def test_the_encoder_is_built_in_its_own_folder(self) -> None:
+        out = self.clone / "build-vision" / "bin"
+        out.mkdir(parents=True)
+        (out / "strata-vision").write_bytes(b"vision encoder")
+        path = self.job.build_vision(self.clone, {"STRATA_ENABLE_CUDA": "ON",
+                                                 "CMAKE_CUDA_ARCHITECTURES": "89"})
+        self.assertEqual(path, out / "strata-vision")
+        self.assertTrue(any(f.startswith("-DLLAMA_DIR=") for f in self.job.calls[0]))
+        self.assertIn("-DSTRATA_VISION_CUDA=ON", self.job.calls[0])
+        self.assertEqual(targets_of(self.job.calls[1]), ["strata-vision"])
+
+    def test_a_release_without_the_encoder_is_said_not_crashed_on(self) -> None:
+        shutil.rmtree(self.clone / "tools")
+        self.assertIsNone(self.job.build_vision(self.clone, {}))
+        self.assertIn("no tools/vision", "\n".join(self.job.log))
+        self.assertEqual(self.job.calls, [], "nothing was configured for a project that is not there")
+
+    def test_a_failed_encoder_build_is_reported_and_the_engine_still_goes(self) -> None:
+        job = StubBuild([1])
+        self.assertIsNone(job.build_vision(self.clone, {}))
+        self.assertIn("could not be configured", "\n".join(job.log))
+
+    def test_an_extra_binary_is_stored_with_the_engine(self) -> None:
+        build_dir = self.tmp / "build"
+        build_dir.mkdir()
+        (build_dir / "strata").write_bytes(b"engine")
+        vision = self.tmp / "build-vision" / "bin" / "strata-vision"
+        vision.parent.mkdir(parents=True)
+        vision.write_bytes(b"vision encoder")
+        job = BuildJob()
+        job.log_path = self.tmp / "build.log"
+        copied, key = job.transfer_binaries(build_dir, {"version": "0.1.45"}, "iq2_xs", [vision])
+        self.assertEqual(sorted(copied), ["strata", "strata-vision"])
+        self.assertEqual((quant_store.store_dir("iq2_xs") / "strata-vision").read_bytes(),
+                         b"vision encoder")
+
+
+class InterfaceWiringTests(unittest.TestCase):
+    """The worker this project ships is only built if the clone includes it.
+
+    engine-src/ is copied into the clone, but upstream's CMakeLists.txt has no line
+    that reads it, so without the wiring the copy is inert and the log says a worker
+    was injected when nothing was built.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cmake = self.tmp / "CMakeLists.txt"
+        self.cmake.write_text("project(Strata)\nadd_executable(strata src/generate.cpp)\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_line_is_added_once(self) -> None:
+        self.assertTrue(build_api.wire_in_interface(self.tmp))
+        self.assertTrue(build_api.wire_in_interface(self.tmp))
+        self.assertEqual(self.cmake.read_text().count(build_api.INTERFACE_LINE), 1)
+        self.assertIn("add_executable(strata", self.cmake.read_text(), "the clone's own project is kept")
+
+    def test_a_missing_cmake_file_is_reported_not_raised(self) -> None:
+        self.assertFalse(build_api.wire_in_interface(self.tmp / "no-such-clone"))
 
 
 if __name__ == "__main__":

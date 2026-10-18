@@ -1,6 +1,6 @@
 {
-  "_note": "Template for config/run-<model>.json. Copy it, fill in the paths on your box, and run ./run.sh <model>. Paths are absolute because the engine is started as a separate process; nothing here is read unless a run config names it.",
-  "exe": "engine/strata",
+  "_note": "Template for config/run-<model>.json. Copy it, fill in the paths on your box, and run ./run.sh <model>. The Build tab writes this file for you when it builds an engine for a quant: exe points at that engine in engine/engine_<quant>/, the log goes in logs/, and any runtime data the build ships is copied next to the engine. Paths are absolute because the engine is started as a separate process; nothing here is read unless a run config names it.",
+  "exe": "engine/engine_q2_0/strata",
   "args": [
     "--pack", "/ABSOLUTE/PATH/TO/packs/q2_0",
     "--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf",

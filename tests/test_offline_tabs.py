@@ -103,6 +103,14 @@ class OfflineServerTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode(errors="replace")
 
+    def headers_of(self, path: str) -> dict[str, str]:
+        """Response headers, so a test can say what a browser is allowed to keep."""
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as r:
+                return {k.lower(): v for k, v in r.headers.items()}
+        except urllib.error.HTTPError as e:
+            return {k.lower(): v for k, v in e.headers.items()}
+
     def test_health_reports_the_offline_schema_the_page_reads(self) -> None:
         status, body = self.get("/health")
         self.assertEqual(status, 200, body)
@@ -134,6 +142,17 @@ class OfflineServerTests(unittest.TestCase):
         status, body = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn("engine-offline", body)
+
+    def test_the_page_and_its_script_are_not_served_from_a_cache(self) -> None:
+        # The Build tab's cards change between restarts. A browser holding an old copy of
+        # the page or of app.js shows a tab the server no longer has, which is exactly how
+        # "I restarted and the card is not there" looks.
+        page = self.headers_of("/")
+        self.assertIn("no-store", page.get("cache-control", "").lower(),
+                    f"GET / sent Cache-Control {page.get('cache-control')!r}")
+        script = self.headers_of("/web/app.js")
+        self.assertIn("no-cache", script.get("cache-control", "").lower(),
+                    f"GET /web/app.js sent Cache-Control {script.get('cache-control')!r}")
 
     def test_the_run_config_is_read_without_touching_the_engine(self) -> None:
         status, body = self.get("/config")
