@@ -127,7 +127,15 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   built in `build-vision/` separately, its failure reported and the engine still
   delivered. A build named for a quant also writes `config/run-<quant>.json` when none
   exists: the nearest run config with the quant in its paths rewritten, plus a `_note`
-  naming every path that is not on this box yet. Tests: `DeviceTests`, `EngineTargetTests`,
+  naming every path that is not on this box yet. Those defaults are now applied in two
+  more places, because the form the tab shows and the configuration it then runs were not
+  the same thing: `GET /build/status` runs the manifest through `with_device_defaults()`
+  before it is sent, and `sent_options()` treats an empty field as "no choice" instead of
+  a value, so an untouched switch cannot overwrite the default this box has a toolchain
+  for - an empty `STRATA_ENABLE_CUDA` is what configured a CUDA box with no engine target
+  in it, and an explicit `OFF` from the tab still wins. Tests: `DeviceTests`
+  (`test_an_empty_field_is_not_a_choice`, `test_an_explicit_off_is_a_choice_and_wins`,
+  `test_the_status_payload_carries_those_defaults`), `EngineTargetTests`,
   `InterfaceWiringTests`, `VisionBuildTests` in `tests/test_build_api.py`, and
   `RunConfigTests` in `tests/test_quant_store.py`.
 - **Tune tab**: `optuna_tune/bayesian_tune.py` as a background subprocess, with the

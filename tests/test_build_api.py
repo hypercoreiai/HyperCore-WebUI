@@ -486,6 +486,61 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual(by_name["STRATA_MMQ_TAB"]["default"], "OFF",
                          "there is no CUDA target to build the pointer table from")
 
+    def test_an_empty_field_is_not_a_choice(self) -> None:
+        """The tab sends every control, including the ones nobody touched.
+
+        An empty value has to leave this box's default in place: an empty
+        STRATA_ENABLE_CUDA is what configured a CUDA box with no engine target in it.
+        """
+        device = build_api.device_defaults()
+        sent = build_api.sent_options(device["defs"], {"STRATA_ENABLE_CUDA": "",
+                                                       "CMAKE_CUDA_ARCHITECTURES": "   ",
+                                                       "STRATA_MMQ_TAB": "ON"})
+        self.assertEqual(sent["STRATA_ENABLE_CUDA"], "ON",
+                         "a switch nobody touched keeps the default the tab showed")
+        self.assertEqual(sent["CMAKE_CUDA_ARCHITECTURES"], "89")
+        self.assertEqual(sent["STRATA_MMQ_TAB"], "ON",
+                         "a switch someone did turn on is a choice and wins")
+
+    def test_an_explicit_off_is_a_choice_and_wins(self) -> None:
+        device = build_api.device_defaults()
+        self.assertEqual(
+            build_api.sent_options(device["defs"], {"STRATA_ENABLE_CUDA": "OFF"})["STRATA_ENABLE_CUDA"],
+            "OFF", "off is what the user picked, not an untouched field")
+        self.assertEqual(build_api.sent_options(device["defs"], None), device["defs"],
+                         "nothing sent is not a choice")
+        self.assertEqual(build_api.sent_options({}, {"STRATA_MMQ_TAB": "ON"}), {"STRATA_MMQ_TAB": "ON"})
+
+    def test_the_status_payload_carries_those_defaults(self) -> None:
+        """The form the tab builds from GET /build/status has to be the configuration the
+        same tab then runs: a manifest of upstream defaults shows every GPU backend off,
+        and the build that same tab starts has no engine in it.
+        """
+        tmp = Path(tempfile.mkdtemp())
+        manifest = tmp / "build_options.json"
+        manifest.write_text(json.dumps({
+            "version": "0.1.45",
+            "cmake_options": [{"name": "STRATA_ENABLE_CUDA", "kind": "bool",
+                               "default": "OFF", "help": "Build the CUDA targets",
+                               "visible": True}],
+            "setup_choices": [],
+        }), encoding="utf-8")
+        saved = (build_api.MANIFEST, build_api.ENGINE_DIR, build_api.latest_release)
+        build_api.MANIFEST = manifest
+        build_api.ENGINE_DIR = tmp / "engine"
+        build_api.ENGINE_DIR.mkdir()
+        build_api.latest_release = lambda: {"repo": "x", "releases": []}
+        try:
+            payload = build_api.build_status()
+        finally:
+            build_api.MANIFEST, build_api.ENGINE_DIR, build_api.latest_release = saved
+        shown = {o["name"]: o for o in payload["options"]["cmake_options"]}
+        self.assertEqual(shown["STRATA_ENABLE_CUDA"]["default"], "ON")
+        self.assertEqual(payload["options"]["device"]["device"], "cuda")
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["cmake_options"][0]["default"], "OFF",
+                         "the manifest on disk stays the release's own defaults")
+        shutil.rmtree(tmp, ignore_errors=True)
+
 
 class BackendRuleTests(unittest.TestCase):
     """The rules themselves, independent of what the probes find on the box."""

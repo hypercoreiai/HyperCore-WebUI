@@ -238,6 +238,22 @@ def resolve_build_options(defs: dict[str, Any], device: dict[str, Any]) -> tuple
     return out, notes
 
 
+def sent_options(device_defs: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    """The flags to hand to cmake: this machine's defaults, with what the tab chose on top.
+
+    A field the tab left empty is not a choice, so it must not overwrite the backend this
+    box has a toolchain for: an empty value is what a form sends for a switch nobody
+    touched, and an empty STRATA_ENABLE_CUDA is what made a build configure with no engine
+    target in it. A value the tab did send, including an explicit OFF, always wins.
+    """
+    chosen = dict(device_defs)
+    for key, value in (options or {}).items():
+        if value is None or str(value).strip() == "":
+            continue
+        chosen[key] = value
+    return chosen
+
+
 def with_device_defaults(options: dict[str, Any]) -> dict[str, Any]:
     """The release's build options, with this box's defaults filled in.
 
@@ -344,6 +360,11 @@ def build_status() -> dict[str, Any]:
     newest = releases[0] if releases else None
     have = installed.get("version")
     options = json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.is_file() else None
+    # The manifest holds upstream's defaults, and every GPU backend defaults to OFF, so the
+    # fields the tab builds from it would send a configuration with no engine in it. The
+    # device defaults options_for() applies are applied here too: what the tab shows has to
+    # be what cmake is given, otherwise a build on a CUDA box configures a CPU-only tree.
+    options = with_device_defaults(options) if options else options
     return {
         "installed": installed,
         "latest": listing,
@@ -824,7 +845,7 @@ class BuildJob:
             device = device_defaults()
             # the tab's fields win; a key the tab never sent is filled in from the box.
             # An empty arch is not "no GPU": it means "this machine", not CMake's sm_120 default.
-            chosen = {**device["defs"], **(options or {})}
+            chosen = sent_options(device["defs"], options)
             if not str(chosen.get("CMAKE_CUDA_ARCHITECTURES", "")).strip():
                 chosen["CMAKE_CUDA_ARCHITECTURES"] = device["arch"] or "native"
             chosen, notes = resolve_build_options(chosen, device)
