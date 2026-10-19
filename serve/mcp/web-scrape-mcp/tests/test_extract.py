@@ -1,11 +1,10 @@
 import asyncio
 
-from webscrape.config import Settings
 from webscrape import service
+from webscrape.config import Settings
 from webscrape.extract import extract_media
 
 from conftest import send_bytes
-
 
 GALLERY_HTML = """<!doctype html>
 <html><body>

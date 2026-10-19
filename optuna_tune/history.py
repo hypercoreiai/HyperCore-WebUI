@@ -24,15 +24,15 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 import sys
 from datetime import datetime, timezone
-import statistics
 from pathlib import Path
 from typing import Any
 
 from hardware import Hardware, differences, hardware_from, slug
-from search_space import Config, Param, signature
 from prompt_transfer import TRANSFER_COLUMNS
+from search_space import Config, Param, signature
 
 SCHEMA = "hypercore.tuning_history/1"
 CFG_KEYS: tuple[str, ...] = (
@@ -197,7 +197,7 @@ def machine_read_stats(results_dir: Path, limit: int = 200) -> tuple[list[float]
         rate = parse_machine_rate(lines)
         if rate:
             rates.append(rate)
-        done = next((l.split() for l in lines if l.startswith("DONE")), None)
+        done = next((line.split() for line in lines if line.startswith("DONE")), None)
         if done and len(done) > 14:
             try:
                 file_mb = float(done[13])

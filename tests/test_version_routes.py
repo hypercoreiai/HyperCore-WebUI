@@ -6,6 +6,13 @@ second must either switch or say why it could not - never crash the server. No G
 involved: the server here is --ui-only, so the engine is serve/offline_engine.py and
 the switch is checked for its contract, not for a model load.
 
+The server is started with an API key of its own. Without one it takes the key from
+whichever run config it picks up (serve/server.py: `a.api_key or cfg.get("api_key")`),
+and a run config written by the Build tab carries "0000" - so on a machine that has
+built a quant the routes below answer 401 to a client that knows nothing about it.
+Naming the key here makes the test the same on every machine, and the gate it walks
+through is the one in serve/http_auth.py, not a copy of it.
+
     python3 -m pytest tests/test_version_routes.py -q
 """
 from __future__ import annotations
@@ -25,6 +32,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 from serve import quant_store
 
+#: The key this test's own server requires, and sends back. Chosen so it cannot collide
+#: with a key a real config on this machine might hold.
+API_KEY = "version-routes-test-key"
+
 
 def free_port() -> int:
     with socket.socket() as s:
@@ -43,7 +54,7 @@ class VersionRouteTests(unittest.TestCase):
         self._active_before = quant_store.index().get("active")
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "serve.server", "--ui-only", "--no-attach",
-             "--host", "127.0.0.1", "--port", str(self.port)],
+             "--host", "127.0.0.1", "--port", str(self.port), "--api-key", API_KEY],
             cwd=str(ROOT), env=os.environ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.wait_for_health()
 
@@ -72,11 +83,18 @@ class VersionRouteTests(unittest.TestCase):
         out = self.proc.stdout.read().decode(errors="replace") if self.proc.stdout else ""
         self.fail(f"the --ui-only server never answered /health:\n{out}")
 
-    def request(self, path: str, body: dict | None = None) -> tuple[int, dict]:
+    def request(self, path: str, body: dict | None = None, key: str | None = None) -> tuple[int, dict]:
+        """One call to this test's server. `key=None` means the test's own key.
+
+        Pass key="" to ask as a client that has no credential at all.
+        """
+        headers = {"Authorization": "Bearer " + (API_KEY if key is None else key)}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}{path}",
             data=json.dumps(body).encode() if body is not None else None,
-            headers={"Content-Type": "application/json"} if body is not None else {})
+            headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.loads(r.read())
@@ -119,6 +137,24 @@ class VersionRouteTests(unittest.TestCase):
         self.assertIn("Load it", payload["message"])
         # the app must still answer afterwards
         self.assertEqual(self.request("/health")[0], 200)
+
+    def test_a_request_with_no_key_is_401_with_the_body_every_front_uses(self) -> None:
+        status, payload = self.request("/versions", key="")
+        self.assertEqual(status, 401)
+        self.assertEqual(payload, {"error": {"type": "authentication_error",
+                                            "message": "missing or wrong API key"}})
+
+    def test_the_wrong_key_is_refused_and_the_api_key_header_is_accepted(self) -> None:
+        self.assertEqual(self.request("/versions", key="not-the-key")[0], 401)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/versions",
+                                     headers={"x-api-key": API_KEY})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            self.assertEqual(r.status, 200)
+
+    def test_health_is_open_so_a_monitoring_probe_can_still_use_it(self) -> None:
+        # serve/http_auth.py: the gate does not cover health, and this is the route the
+        # server's own startup wait depends on.
+        self.assertEqual(self.request("/health", key="")[0], 200)
 
     def test_the_page_ships_the_dropdown(self) -> None:
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as r:

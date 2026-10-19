@@ -45,7 +45,11 @@ check(SERVER.includes('path == "/config/strata-hook/stop"'), "POST /config/strat
 check(HOOK.includes("subprocess.Popen(command, cwd=str(setup.parent), stdin=subprocess.DEVNULL,") &&
       HOOK.includes("stdout=log, stderr=log)"),
       "the setup script is detached with its output to a file, not a pipe");
-check(HOOK.includes("_under_scratch"), "tmp/ is refused as a checkout: it is scratch");
+check(HOOK.includes("_under_scratch"), "the hook knows which folder is the clone a build keeps");
+check(HOOK.includes("_scratch_checkout"), "the clone in tmp/ is a checkout when there is nothing else on the box");
+check(HOOK.includes("def durable_data_dir()"), "a setup run from that clone pins its data folder outside tmp/");
+check(HOOK.includes("_build_busy"), "a setup is refused while the Build tab is compiling the same clone");
+check(APP.includes("model files go to ${b.data_dir}"), "the hook cards say where the packs of a clone setup go");
 check(HOOK.includes("_run_config_cwd"),
       "the checkout search reads the run config's cwd, the Strata folder the engine runs from");
 check(HOOK.includes("SIBLING_DIRS"), "a Strata folder next to this project is searched");
@@ -64,6 +68,20 @@ check(HOOK.includes("STEP_RE") && HOOK.includes('"stage": self.stage'),
 check(HOOK.includes("def _note(self, lines: list[str]) -> None:"), "the hook collects no problems from the log");
 check(HOOK.includes("def _last_lines(self, count: int) -> list[str]:"),
       "a run that fails without an [X] line has nothing to show");
+
+// The boxes are read from the release in the dropdown; the hook runs the checkout on the
+// box, which may be an older release. A flag that script never declared is dropped by
+// the hook and named on the page instead of ending the run in an argparse error.
+check(HOOK.includes("FLAG_RE") && HOOK.includes("def accepted_flags(setup: Path)"),
+      "the hook reads the setup.py it is about to run for its own flags");
+check(HOOK.includes("def strip_unaccepted("),
+      "unaccepted flags are removed before the command is built");
+check(HOOK.includes("\"dropped\": list(self.dropped)"),
+      "the status reports the flags it dropped");
+check(APP.includes("dropped: this setup.py does not accept them"),
+      "the page names the flags the checkout does not accept");
+check(APP.includes("b.command.slice(1).join(\" \")"),
+      "the command line under the boxes is replaced by the one that actually runs");
 
 if (failures) {
   console.error(`${failures} check(s) failed`);

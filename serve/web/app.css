@@ -324,15 +324,36 @@ body[data-surface="metal"] {
   border-radius: var(--st-r-sm); }
 .build-status__problems li.error { background: var(--st-danger-tint); color: var(--st-danger-text); }
 .build-status__problems li.warning { background: var(--st-warn-tint); color: var(--st-warn-text); }
-.build-choices-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--st-s-4); margin-bottom: var(--st-s-3); }
-.build-choices-group__title { font-size: var(--st-fs-sm); letter-spacing: .07em; text-transform: uppercase;
-  color: var(--st-ink-muted); margin: 0 0 8px; font-weight: var(--st-fw-bold); }
+/* The boxes sit on the same tracks as the Build options card below: every box starts at
+   the left edge of its column, so the dropdowns line up in rows instead of trailing off
+   after the box before them. auto-fill, not auto-fit: auto-fit collapses the tracks a group
+   does not fill, so a group with two boxes spreads its two columns across the whole card and
+   lands on different boundaries than the group above it. Filling the card with tracks keeps
+   every group on the same columns, so a two-box group starts its second box on the same
+   boundary as a six-box group. A track is the Build options width (220px) as its floor and
+   the card's share of the row above that, so it is sized by the card and not by what is
+   written inside it. */
+.build-choices-group { margin-bottom: var(--st-s-3); }
+/* The title is a heading above the boxes, not a cell in the grid. A grid item that spans the
+   row is still a grid item: it takes a row of its own, so the first box starts below it, and
+   it contributes its own max-content width to the tracks it spans, so a title wider than the
+   boxes under it widens those columns and offsets every box below it. Out of the grid it takes
+   no track and no row. */
+.build-choices-group__title { display: block; font-size: var(--st-fs-sm); letter-spacing: .07em;
+  text-transform: uppercase; color: var(--st-ink-muted); margin: 0 0 8px; font-weight: var(--st-fw-bold); }
+.build-choices-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--st-s-4); }
 .build-choices label, .build-options label { display: flex; flex-direction: column; gap: 4px;
-  font-size: var(--st-fs-md); color: var(--st-ink-muted); }
+  align-items: start; font-size: var(--st-fs-md); color: var(--st-ink-muted); }
 .build-choices label code { font: 400 11px var(--st-font-mono); color: var(--st-ink-soft); }
 .build-choices input, .build-choices select { font: inherit; padding: 8px 10px; border: 1px solid var(--st-line);
   border-radius: var(--st-radius); background: var(--st-panel); color: var(--st-ink); }
+.build-choices select, .build-options select { width: fit-content; max-width: 100%; min-width: 120px; }
+/* The character floor is only for a browser without fit-content. --choice-chars is set
+   per box by choiceField to the length of the longest option it contains. */
+@supports not (width: fit-content) {
+  .build-choices select { width: calc(var(--choice-chars, 12) * 8px + 34px); max-width: 100%; min-width: 120px; }
+}
 .build-command { font: 400 12px var(--st-font-mono); white-space: pre-wrap; background: var(--st-panel);
   border: 1px solid var(--st-line); border-radius: var(--st-radius); padding: var(--st-s-3) var(--st-s-4); }
 .build-options-grid, #build-options-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

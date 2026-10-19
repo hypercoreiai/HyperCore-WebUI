@@ -177,11 +177,16 @@ def main():
             'project(Strata VERSION 0.1.45)\noption(STRATA_ENABLE_CUDA "CUDA" OFF)\n', encoding="utf-8")
         self.original_fetch = build_api.fetch_release_files
         build_api.fetch_release_files = lambda tag: (self.clone, "")
+        # An empty scratch folder: options_for() now looks in tmp/ first, and the checkouts
+        # this machine has would answer for a tag this test did not create.
+        self.saved_tmp = build_api.TMP_DIR
+        build_api.TMP_DIR = self.tmp / "scratch"
         build_api._options_cache.clear()
         build_api.MANIFEST = self.tmp / "build_options.json"
 
     def tearDown(self) -> None:
         build_api.fetch_release_files = self.original_fetch
+        build_api.TMP_DIR = self.saved_tmp
         build_api.MANIFEST = ROOT / "config" / "build_options.json"
         build_api._options_cache.clear()
         import shutil
@@ -221,7 +226,9 @@ def main():
         options = build_api.options_for("v9.9.9")
         self.assertIn("could not read", options["error"])
         self.assertEqual(options["cmake_options"], [])
-        self.assertEqual(build_api.setup_choices(options), {"groups": {}, "hidden": 0, "total": 0})
+        setup = build_api.setup_choices(options)
+        self.assertEqual({"groups": setup["groups"], "hidden": setup["hidden"], "total": setup["total"]},
+                         {"groups": {}, "hidden": 0, "total": 0})
 
     def test_build_status_carries_the_grouped_choices(self) -> None:
         options = build_api.options_for("v0.1.45")
@@ -260,6 +267,145 @@ def main():
             self.assertTrue(setup["groups"][group], f"the {group} group is empty")
         self.assertEqual(setup["hidden"], 1)  # --port is housekeeping, not a choice
         self.assertEqual(setup["total"], 7)
+
+
+class LocalCheckoutTests(unittest.TestCase):
+    """The checkouts tmp/ already holds, and the release the choices are read from.
+
+    A build no longer deletes its clone, so a machine that has built two releases has two
+    trees on disk. The dropdown was filled only from GitHub's listing, so the card could
+    name one release while listing another's: on this machine the manifest was extracted
+    from tmp/strata-v0.2.0-beta, which declares 0.1.45.3, while the card's title was the
+    installed engine's 0.1.45. These are the scan and the choice it makes.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved_tmp, self.saved_manifest = build_api.TMP_DIR, build_api.MANIFEST
+        build_api.TMP_DIR = self.tmp
+        build_api.MANIFEST = self.tmp / "build_options.json"
+        build_api._options_cache.clear()
+        self.saved_fetch, self.saved_release = build_api.fetch_release_files, build_api.latest_release
+        build_api.fetch_release_files = lambda tag: (None, "no network in this test")
+        build_api.latest_release = lambda: {"repo": "x", "releases": []}
+        # The search order is the real filesystem, so it is stubbed: a checkout the user
+        # keeps on this box would otherwise appear in every count below.
+        self.saved_search = build_api.strata_hook.search_candidates
+        build_api.strata_hook.search_candidates = lambda run_config=None: []
+        # Two checkouts, and neither folder is named for the version it declares.
+        self.old = self._checkout("strata-v0.1.45", "0.1.45", ["int8", "q4_0"])
+        self.new = self._checkout("strata-v0.2.0-beta", "0.1.45.3", ["int8", "q4_0", "k8v4"])
+        (self.tmp / "manifest-v0.1.45").mkdir()     # the scratch a fetch writes
+        (self.tmp / "strata-data").mkdir()          # the packs folder, not a release
+
+    def _checkout(self, name: str, version: str, kv: list[str]) -> Path:
+        folder = self.tmp / name
+        folder.mkdir()
+        (folder / "CMakeLists.txt").write_text(
+            f"project(strata VERSION {version} LANGUAGES CXX)\n", encoding="utf-8")
+        (folder / "setup.py").write_text(
+            "import argparse\nap = argparse.ArgumentParser()\n"
+            f"ap.add_argument('--kv', choices={json.dumps(kv)})\n", encoding="utf-8")
+        return folder
+
+    def tearDown(self) -> None:
+        build_api.TMP_DIR, build_api.MANIFEST = self.saved_tmp, self.saved_manifest
+        build_api.fetch_release_files, build_api.latest_release = self.saved_fetch, self.saved_release
+        build_api.strata_hook.search_candidates = self.saved_search
+        build_api._options_cache.clear()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_scan_finds_the_checkouts_and_orders_them_newest_first(self) -> None:
+        found = build_api.local_releases()
+        self.assertEqual([r["tag"] for r in found], ["v0.2.0-beta", "v0.1.45"])
+        self.assertEqual(found[0]["version"], "0.1.45.3",
+                         "the version is what the checkout declares, not what its folder is named")
+        self.assertTrue(found[0]["has_setup"] and found[0]["has_cmake"])
+        self.assertTrue(found[0]["folder"].endswith("strata-v0.2.0-beta"), found[0]["folder"])
+
+    def test_a_folder_that_is_not_a_checkout_is_not_reported_as_a_release(self) -> None:
+        found = build_api.local_releases()
+        self.assertEqual(len(found), 2, f"scratch folders were counted as releases: {found}")
+        self.assertNotIn("strata-data", [r["folder"] for r in found])
+
+    def test_a_checkout_kept_outside_tmp_is_offered_as_a_build_source(self) -> None:
+        """serve/strata_hook.py runs setup.py from a Strata the user keeps elsewhere, so
+        the scan has to offer the same tree: otherwise the card names one release and a
+        build started from the hook uses another."""
+        kept = self.tmp / "kept" / "Strata"
+        kept.mkdir(parents=True)
+        (kept / "setup.py").write_text("import argparse\n", encoding="utf-8")
+        build_api.strata_hook.search_candidates = lambda run_config=None: [kept, self.tmp / "strata-data"]
+        found = build_api.local_releases()
+        entry = next((r for r in found if r["source"] == "checkout"), None)
+        self.assertIsNotNone(entry, f"the search order was not scanned: {found}")
+        self.assertEqual(entry["tag"], "Strata",
+                         "a folder whose name is not a tag is reported under its name")
+        self.assertIsNone(entry["version"], "a checkout with no CMakeLists.txt has no version")
+        self.assertTrue(entry["has_setup"] and not entry["has_cmake"])
+        self.assertEqual(len(found), 3, f"a folder that is not a checkout was counted: {found}")
+
+    def test_a_tree_that_is_both_in_tmp_and_in_the_search_is_reported_once(self) -> None:
+        build_api.strata_hook.search_candidates = lambda run_config=None: [self.new, self.old]
+        found = build_api.local_releases()
+        self.assertEqual(len(found), 2, f"a checkout was counted twice: {found}")
+        self.assertEqual({r["source"] for r in found}, {"tmp"},
+                         "the clone a build would use is not the one reported")
+
+    def test_a_checkout_with_no_cmake_line_is_still_listed_as_a_checkout(self) -> None:
+        """A tree whose project() line cannot be read is a release the user can still pick;
+        it is reported with no version rather than dropped."""
+        stray = self.tmp / "strata-main"
+        stray.mkdir()
+        (stray / "setup.py").write_text("import argparse\n", encoding="utf-8")
+        found = build_api.local_releases()
+        self.assertIn("main", [r["tag"] for r in found])
+        self.assertIsNone(next(r for r in found if r["tag"] == "main")["version"])
+
+    def test_the_choices_are_read_from_the_checkout_the_user_picked(self) -> None:
+        options = build_api.options_for("v0.2.0-beta")
+        self.assertEqual(options["version"], "0.1.45.3")
+        self.assertTrue(options["from"].endswith("strata-v0.2.0-beta"), options["from"])
+        self.assertEqual(build_api.setup_choices(options)["groups"]["kv-cache"][0]["choices"],
+                         ["int8", "q4_0", "k8v4"])
+
+    def test_a_tag_with_no_checkout_here_still_goes_to_github(self) -> None:
+        options = build_api.options_for("v0.1.44")
+        self.assertEqual(options["from"], "unreachable")
+
+    def test_the_manifest_is_used_when_this_machine_has_no_checkout_for_that_release(self) -> None:
+        build_api.MANIFEST.write_text(json.dumps({"version": "0.1.44", "cmake_options": [],
+                                                  "setup_choices": []}), encoding="utf-8")
+        options = build_api.options_for("v0.1.44")
+        self.assertEqual(options["from"], "the last build of this release")
+
+    def test_build_status_reports_the_checkouts_as_build_sources(self) -> None:
+        payload = build_api.build_status()
+        self.assertEqual([r["tag"] for r in payload["local"]], ["v0.2.0-beta", "v0.1.45"])
+
+    def test_the_setup_payload_names_the_release_the_choices_came_from(self) -> None:
+        """The card's title has to be the release the flags belong to, not the engine that
+        happens to be installed: `version` is what that checkout declares, `tag` is the name
+        it was fetched as, and `from` says which tree the flags were read out of."""
+        setup = build_api.setup_choices(build_api.options_for("v0.2.0-beta"))
+        self.assertEqual(setup["version"], "0.1.45.3")
+        self.assertEqual(setup["tag"], "v0.2.0-beta")
+        self.assertTrue(setup["from"].endswith("strata-v0.2.0-beta"), setup["from"])
+
+    def test_a_checkout_with_no_version_line_falls_back_to_the_tag_it_was_named_for(self) -> None:
+        stray = self.tmp / "strata-main"
+        stray.mkdir()
+        (stray / "setup.py").write_text("import argparse\n", encoding="utf-8")
+        setup = build_api.setup_choices(build_api.options_for("main"))
+        self.assertEqual(setup["version"], "main")
+
+    def test_the_scan_is_build_aparts_only(self) -> None:
+        """tmp/ is scratch for everything that serves a chat: the release scan is the one
+        reader, and it lives in the build module."""
+        for name in ("serve/server.py", "serve/quant_store.py", "serve/strata_hook.py"):
+            source = (ROOT / name).read_text(encoding="utf-8")
+            self.assertNotIn("local_releases", source, f"{name} reads the scan")
+        self.assertIn("local_releases", (ROOT / "serve" / "build_api.py").read_text(encoding="utf-8"))
 
 
 class ScratchContractTests(unittest.TestCase):
@@ -1023,6 +1169,378 @@ class ReusedCloneTests(unittest.TestCase):
                         "the build still clones over a checkout it already has")
         self.assertIn("reused the clone already in tmp/", body,
                       "a build that reused a clone does not say so in the log")
+
+class AssetTests(unittest.TestCase):
+    """Which release asset the ready-made path downloads, and how it is unpacked.
+
+    0.1.45 published one zip per OS. 0.2.0 publishes a per-toolchain engine bundle
+    (strata-engine-<ver>-<os>-<arch>-<backend>-<toolchain>.tar.gz) beside the app
+    installers and the updater artifact, so the pick has to be by content: an archive,
+    for this OS, for the GPU toolchain this box has. Nothing here names a release.
+    """
+
+    RELEASE_020: ClassVar[dict[str, Any]] = {
+        "version": "0.2.0", "tag": "v0.2.0-beta",
+        "assets": [
+            {"name": "Strata-0.2.0-beta-windows-cuda13.exe", "url": "u1"},
+            {"name": "Strata-0.2.0-beta-linux-update.AppImage", "url": "u2"},
+            {"name": "Strata.app.tar.gz", "url": "u3"},
+            {"name": "strata-engine-0.1.46-linux-x86_64-cuda-cuda13.tar.gz", "url": "u4"},
+            {"name": "strata-engine-0.1.46-linux-x86_64-cuda-cuda12.tar.gz", "url": "u5"},
+            {"name": "strata-engine-0.1.46-linux-x86_64-hip.tar.gz", "url": "u6"},
+            {"name": "strata-engine-0.1.46-windows-x86_64-cuda-cuda13.zip", "url": "u7"},
+        ],
+    }
+    RELEASE_0145: ClassVar[dict[str, Any]] = {
+        "version": "0.1.45", "tag": "v0.1.45",
+        "assets": [
+            {"name": "strata-linux-x64.zip", "url": "a1"},
+            {"name": "strata-linux-x64-cuda12.zip", "url": "a2"},
+            {"name": "strata-windows-x64.zip", "url": "a3"},
+            {"name": "strata-windows-x64-hip.zip", "url": "a4"},
+        ],
+    }
+
+    def test_the_toolkit_on_the_box_picks_the_matching_bundle(self) -> None:
+        cuda13 = build_api.asset_for(self.RELEASE_020,
+                                     {"device": "cuda", "toolkit": "/usr/local/cuda-13.4/bin", "arch": "sm_89"})
+        self.assertEqual(cuda13["name"], "strata-engine-0.1.46-linux-x86_64-cuda-cuda13.tar.gz")
+        cuda12 = build_api.asset_for(self.RELEASE_020,
+                                     {"device": "cuda", "toolkit": "/usr/local/cuda-12.6/bin", "arch": "sm_75"})
+        self.assertEqual(cuda12["name"], "strata-engine-0.1.46-linux-x86_64-cuda-cuda12.tar.gz")
+
+    def test_a_hip_box_gets_the_hip_bundle(self) -> None:
+        asset = build_api.asset_for(self.RELEASE_020, {"device": "hip", "arch": "", "defs": {}})
+        self.assertEqual(asset["name"], "strata-engine-0.1.46-linux-x86_64-hip.tar.gz")
+
+    def test_an_app_installer_is_neither_an_updater_nor_the_engine(self) -> None:
+        for name in ("Strata-0.2.0-beta-windows-cuda13.exe", "Strata-0.2.0-beta-linux-update.AppImage",
+                     "Strata.app.tar.gz", "strata-linux-x64.zip"):
+            self.assertEqual(build_api.is_engine_archive(name), name == "strata-linux-x64.zip", f"{name}")
+
+    def test_no_gpu_toolchain_refuses_a_gpu_only_archive(self) -> None:
+        """A CUDA bundle downloaded on a CPU-only box is an engine that cannot run."""
+        self.assertIsNone(build_api.asset_for(self.RELEASE_020, {"device": "none", "arch": "", "defs": {}}))
+        plain = {"version": "0.1.45", "assets": [{"name": "strata-linux-x64.zip", "url": "a1"}]}
+        self.assertEqual(build_api.asset_for(plain, {"device": "none"})["name"], "strata-linux-x64.zip")
+
+    def test_the_0145_names_are_still_understood(self) -> None:
+        cuda = build_api.asset_for(self.RELEASE_0145, {"device": "cuda", "toolkit": "/usr/local/cuda-12.4/bin"})
+        self.assertEqual(cuda["name"], "strata-linux-x64-cuda12.zip")
+        self.assertEqual(build_api.asset_for(self.RELEASE_0145, {"device": "none"})["name"], "strata-linux-x64.zip")
+        hip = build_api.asset_for(self.RELEASE_0145, {"device": "hip"})
+        self.assertEqual(hip["name"], "strata-linux-x64.zip", "no HIP archive for Linux, so the plain one")
+
+    def test_an_os_the_release_does_not_cover_is_said_plainly(self) -> None:
+        windows_only = {"version": "0.2.0", "assets": [
+            {"name": "strata-engine-0.1.46-windows-x86_64-cuda-cuda13.zip", "url": "u7"}]}
+        self.assertIsNone(build_api.asset_for(windows_only, {"device": "cuda", "toolkit": "/usr/local/cuda-13.4"}))
+        self.assertIsNone(build_api.asset_for({"version": "0.2.0", "assets": []}, {"device": "none"}))
+
+    def test_a_tar_gz_engine_is_unpacked_and_installed(self) -> None:
+        """The ready-made path has to read tar.gz, not only zip."""
+        import io
+        import tarfile
+        blob = io.BytesIO()
+        with tarfile.open(fileobj=blob, mode="w:gz") as tf:
+            for name, data in (("strata", b"ready engine"), ("libstrata_kq.so", b"kernels")):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+        blob = blob.getvalue()
+        digest = __import__("hashlib").sha256(blob).hexdigest()
+        tmp = Path(tempfile.mkdtemp())
+        real_tmp, real_urlretrieve, real_digests, real_engine = (
+            build_api.TMP_DIR, build_api.urllib.request.urlretrieve,
+            build_api.published_digests, build_api.ENGINE_DIR)
+        build_api.TMP_DIR = tmp / "scratch"
+        build_api.ENGINE_DIR = tmp / "engine"
+        build_api.urllib.request.urlretrieve = lambda url, dest: Path(dest).write_bytes(blob)
+        build_api.published_digests = lambda r: {"strata-engine-0.1.46-linux-x86_64-cuda-cuda13.tar.gz": digest}
+        try:
+            out = BuildJob().fetch_prebuilt(
+                {"version": "0.1.46", "tag": "v0.1.46",
+                 "assets": [{"name": "strata-engine-0.1.46-linux-x86_64-cuda-cuda13.tar.gz", "url": "file://x"}]},
+                None)
+            self.assertTrue(out["ok"], out.get("error"))
+            self.assertEqual(sorted(out["files"]), ["BUILD.json", "libstrata_kq.so", "strata"],
+                            "the tar.gz contents plus the BUILD.json the install writes")
+            self.assertTrue((build_api.ENGINE_DIR / "strata").is_file())
+            self.assertFalse((build_api.TMP_DIR / "strata-engine-0.1.46-linux-x86_64-cuda-cuda13.tar.gz").exists(),
+                            "the downloaded archive is left in the scratch folder")
+        finally:
+            build_api.TMP_DIR, build_api.urllib.request.urlretrieve, \
+                build_api.published_digests, build_api.ENGINE_DIR = \
+                real_tmp, real_urlretrieve, real_digests, real_engine
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_an_archive_member_outside_its_folder_is_refused(self) -> None:
+        import zipfile
+        scratch = Path(tempfile.mkdtemp())
+        archive = scratch / "evil.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("../strata", b"not the engine")
+        dest = scratch / "engine"
+        try:
+            with self.assertRaises(ValueError) as caught:
+                build_api.unpack_archive(archive, dest)
+            self.assertIn("outside its folder", str(caught.exception))
+            self.assertFalse(list(dest.glob("*")), "nothing was written before the refusal")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_a_tar_member_is_unpacked_into_the_folder_it_is_given(self) -> None:
+        import io
+        import tarfile
+        scratch = Path(tempfile.mkdtemp())
+        archive = scratch / "engine.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            for name, data in (("strata", b"ready engine"), ("data/expert-profile.bin", b"profile")):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+        dest = scratch / "unpacked"
+        try:
+            names = build_api.unpack_archive(archive, dest)
+            self.assertEqual(sorted(names), ["data/expert-profile.bin", "strata"])
+            self.assertEqual((dest / "strata").read_bytes(), b"ready engine")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+class VersionTests(unittest.TestCase):
+    """An update is a newer version, not a different string.
+
+    0.1.45.3 is a patch of 0.1.45: an engine built from it must not be told it is
+    behind the 0.1.45 release.
+    """
+
+    def test_versions_compare_as_numbers(self) -> None:
+        self.assertEqual(build_api.version_tuple("0.1.45.3"), (0, 1, 45, 3))
+        self.assertEqual(build_api.version_tuple("v0.2.0-beta"), (0, 2, 0))
+        self.assertIsNone(build_api.version_tuple(""))
+        self.assertTrue(build_api.is_newer("0.1.45.3", "0.1.45"))
+        self.assertFalse(build_api.is_newer("0.1.45", "0.1.45.3"))
+        self.assertFalse(build_api.is_newer("0.1.45", "0.1.45"))
+        self.assertTrue(build_api.is_newer("0.2.0", "0.1.45.3"))
+        self.assertFalse(build_api.is_newer(None, None), "nothing to update from")
+
+    def test_an_engine_ahead_of_the_named_release_is_not_told_to_update(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        real_engine, real_manifest = build_api.ENGINE_DIR, build_api.MANIFEST
+        build_api.ENGINE_DIR = tmp / "engine"
+        build_api.ENGINE_DIR.mkdir()
+        try:
+            build_api.latest_release = lambda: {"repo": "Niko1221/Strata",
+                                               "releases": [{"tag": "v0.1.45", "version": "0.1.45",
+                                                            "assets": []}]}
+            (build_api.ENGINE_DIR / "BUILD.json").write_text(json.dumps({"version": "0.1.45.3"}), encoding="utf-8")
+            self.assertFalse(build_api.build_status()["update_available"],
+                             "an engine already at 0.1.45.3 is not behind a 0.1.45 release")
+            (build_api.ENGINE_DIR / "BUILD.json").write_text(json.dumps({"version": "0.1.45"}), encoding="utf-8")
+            self.assertFalse(build_api.build_status()["update_available"], "the same version is not an update")
+            build_api.latest_release = lambda: {"repo": "Niko1221/Strata",
+                                               "releases": [{"tag": "v0.1.45.3", "version": "0.1.45.3",
+                                                            "assets": []}]}
+            self.assertTrue(build_api.build_status()["update_available"], "0.1.45 against 0.1.45.3 is")
+        finally:
+            build_api.ENGINE_DIR, build_api.MANIFEST = real_engine, real_manifest
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class RunChoiceTests(unittest.TestCase):
+    """The Setup-choice boxes reach the run config a build writes.
+
+    A run config is copied from the nearest config on the box - the shipped template
+    when there is none - so a build started with --context 262144 --kv q4_0 ran on
+    whatever that file happened to name. The boxes are sent with the build request, and
+    these are the settings written into the config the build just wrote.
+    """
+
+    TEMPLATE: ClassVar[dict[str, Any]] = {
+        "_note": "Template for q2_0.",
+        "exe": "engine/strata",
+        "args": ["--max-context", "131072", "--kv", "int8", "--resident-experts"],
+        "model_name": "q2_0",
+        "port": 8080,
+    }
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved = (build_api.ENGINE_DIR, quant_store.ENGINE_DIR, quant_store.VERSIONS_DIR,
+                      quant_store.INDEX_PATH, quant_store.LEGACY_DIR, quant_store.CONFIG_DIR,
+                      quant_store.ROOT, quant_store.PROJECT_DATA_DIR, quant_store.TMP_DIR)
+        build_api.ENGINE_DIR = self.tmp / "engine"
+        quant_store.ENGINE_DIR = build_api.ENGINE_DIR
+        quant_store.VERSIONS_DIR = quant_store.ENGINE_DIR / "versions"
+        quant_store.LEGACY_DIR = quant_store.VERSIONS_DIR
+        quant_store.INDEX_PATH = quant_store.ENGINE_DIR / "VERSIONS.json"
+        quant_store.CONFIG_DIR = self.tmp / "config"
+        quant_store.CONFIG_DIR.mkdir(parents=True)
+        quant_store.PROJECT_DATA_DIR = self.tmp / "data"
+        quant_store.TMP_DIR = self.tmp / "tmp"
+        (quant_store.CONFIG_DIR / "run-example.json").write_text(
+            json.dumps(self.TEMPLATE), encoding="utf-8")
+        self.build_dir = self.tmp / "strata-v0.1.45" / "build"
+        self.build_dir.mkdir(parents=True)
+        (self.build_dir / "strata").write_bytes(b"engine binary")
+        self.job = BuildJob()
+
+    def tearDown(self) -> None:
+        (build_api.ENGINE_DIR, quant_store.ENGINE_DIR, quant_store.VERSIONS_DIR,
+         quant_store.INDEX_PATH, quant_store.LEGACY_DIR, quant_store.CONFIG_DIR,
+         quant_store.ROOT, quant_store.PROJECT_DATA_DIR, quant_store.TMP_DIR) = self.saved
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def build_with(self, choices: list[str]) -> dict[str, Any]:
+        """Run the transfer half of a build with the Setup boxes held by `choices`."""
+        self.job.choices = quant_store.choice_map(choices)
+        self.job.transfer_binaries(self.build_dir, {"version": "0.1.45"}, "q2_0")
+        return json.loads((quant_store.CONFIG_DIR / "run-q2_0.json").read_text(encoding="utf-8"))
+
+    @staticmethod
+    def arg_value(cfg: dict[str, Any], flag: str) -> str | None:
+        args = cfg.get("args") or []
+        if flag not in args:
+            return None
+        at = args.index(flag)
+        return str(args[at + 1]) if at + 1 < len(args) else None
+
+    def test_the_context_and_kv_the_boxes_hold_are_written_into_the_run_config(self):
+        cfg = self.build_with(["--context", "262144", "--kv", "q4_0", "--port", "8081"])
+        self.assertEqual(self.arg_value(cfg, "--max-context"), "262144",
+                         "the build ran on the template's context")
+        self.assertEqual(self.arg_value(cfg, "--kv"), "q4_0",
+                         "the build ran on the template's KV cache")
+        self.assertEqual(cfg["port"], 8081, "the port in the box was not written")
+        log = "\n".join(self.job.log)
+        self.assertIn("setup choices written to config/run-q2_0.json", log,
+                     "the build never said it applied the boxes")
+
+    def test_a_setting_the_config_already_has_is_not_written_again(self):
+        cfg = self.build_with(["--context", "131072", "--kv", "int8"])
+        self.assertEqual(self.arg_value(cfg, "--max-context"), "131072")
+        self.assertEqual(len(cfg["args"]), len(self.TEMPLATE["args"]),
+                        "a flag was added even though the config already had it")
+        self.assertNotIn("setup choices written", "\n".join(self.job.log),
+                        "nothing changed, so the log should not claim it did")
+
+    def test_an_empty_box_leaves_the_config_as_it_was(self):
+        cfg = self.build_with(["--context", "", "--kv", ""])
+        self.assertEqual(cfg["args"], self.TEMPLATE["args"], "an unset box overwrote a setting")
+
+    def test_a_build_with_no_quant_says_its_choices_went_nowhere(self):
+        """The default engine has no run config of its own, so the boxes have nowhere to go."""
+        self.job.choices = {"--context": "32768"}
+        self.job.transfer_binaries(self.build_dir, {"version": "0.1.45"}, None)
+        self.assertIn("writes no run config of its own", "\n".join(self.job.log),
+                     "the build let the boxes look applied without saying they were not")
+        cfg = json.loads((quant_store.CONFIG_DIR / "run-example.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["args"], self.TEMPLATE["args"],
+                         "a default-engine build rewrote a model's config")
+
+    def test_a_model_box_that_does_not_match_the_quant_box_says_so(self):
+        """The quant box is the explicit answer, and a card that disagrees is not silent."""
+        self.job.choices = {"--model": "IQ3_XXS", "--context": "32768"}
+        self.job.transfer_binaries(self.build_dir, {"version": "0.1.45"}, "q2_0")
+        log = "\n".join(self.job.log)
+        self.assertIn("the model box names IQ3_XXS, but this build is stored for q2_0", log,
+                      "the build stored an engine for a model without saying which")
+        self.assertNotIn("--model IQ3_XXS", log, "the model box was reported as an unwritten setting")
+        cfg = json.loads((quant_store.CONFIG_DIR / "run-q2_0.json").read_text(encoding="utf-8"))
+        self.assertEqual(self.arg_value(cfg, "--max-context"), "32768",
+                         "the settings were dropped because the quant did not match")
+
+    def test_a_model_box_that_matches_the_quant_is_not_made_a_fuss_about(self):
+        job = BuildJob()
+        job.choices = {"--model": "IQ3_XXS"}
+        job.transfer_binaries(self.build_dir, {"version": "0.1.45"}, "IQ3_XXS")
+        self.assertNotIn("the model box names", "\n".join(job.log))
+
+    def test_a_flag_no_run_config_carries_is_said_rather_than_silently_dropped(self):
+        cfg = self.build_with(["--vision", "yes", "--image-quant", "Q8_0"])
+        self.assertNotIn("vision", cfg, "the build invented a vision block it cannot fill in")
+        self.assertNotIn("--vision", cfg["args"], "--vision was put in the engine arguments")
+        log = "\n".join(self.job.log)
+        self.assertIn("does not carry", log,
+                     "the build said nothing about the boxes it could not write")
+        self.assertIn("--vision yes", log, "the log does not name the flag it left alone")
+
+    def test_a_flag_written_bare_in_the_config_gets_its_value(self):
+        """`--resident-experts` takes no value; a flag after it is not its value.
+
+        The engine argument lists a run config carries mix value-taking flags with bare
+        switches, so writing one of the boxes must not read the next flag as a value.
+        """
+        args = ["--resident-experts", "--kv", "--prefill", "auto"]
+        self.assertTrue(quant_store._set_arg(args, "--kv", "q4_0"))
+        self.assertEqual(args, ["--resident-experts", "--kv", "q4_0", "--prefill", "auto"],
+                        "the value went in the wrong place")
+        self.assertFalse(quant_store._set_arg(args, "--kv", "q4_0"),
+                        "the same value twice is not a change")
+        self.assertTrue(quant_store._set_arg(args, "--max-context", "32768"))
+        self.assertEqual(args[args.index("--max-context") + 1], "32768")
+        self.assertEqual(len([a for a in args if a == "--kv"]), 1,
+                        "a flag already in the list was added a second time")
+
+    def test_a_bare_flag_is_not_read_as_the_value_of_the_flag_before_it(self):
+        self.assertEqual(quant_store.choice_map(["--context", "32768", "--resident-experts",
+                                                "--kv", "q4_0"]),
+                         {"--context": "32768", "--resident-experts": "", "--kv": "q4_0"})
+
+    def test_the_model_box_names_the_quant_the_build_is_stored_under(self):
+        """A build started from the card is for the model the card is set up for.
+
+        With nothing in the quant box the build used to land in engine/ as the default
+        engine, and the model named above it was ignored.
+        """
+        self.assertEqual(build_api.quant_from_choices(["--model", "UD-IQ4_XS"]), "ud_iq4_xs")
+        self.assertIsNone(build_api.quant_from_choices(["--context", "32768"]),
+                         "no model named, no quant implied")
+        self.assertIsNone(build_api.quant_from_choices(["--model", ""]),
+                         "an empty box is not a choice")
+
+    def test_an_explicit_quant_beats_the_model_box(self):
+        self.assertEqual(build_api.quant_from_choices(["--model", "IQ3_XXS"]), "iq3_xxs")
+        self.assertEqual(build_api.normalise_or_none("q2_0"), "q2_0")
+
+    def test_a_build_of_a_clone_uses_the_quant_the_clone_already_wrote(self):
+        """The card's model box can name a model rather than a size.
+
+        The size is only written in the run config the setup run left in the clone, and a
+        build of that clone is the same model, so it is stored under that quant instead of
+        landing in engine/ as the default engine with no run config of its own.
+        """
+        with tempfile.TemporaryDirectory() as name:
+            clone = Path(name)
+            (clone / "strata-qwen3.8-flash-next-iq2_xs.json").write_text(json.dumps(
+                {"model_name": "qwen3.8-flash-next-iq2_xs",
+                 "args": ["--pack", str(clone / "data" / "packs" / "iq2_xs")]}))
+            self.assertEqual(build_api.quant_from_choices(["--context", "32768"], clone), "iq2_xs")
+            # A size named in the box still wins over what the clone holds.
+            self.assertEqual(build_api.quant_from_choices(["--model", "Q2_0"], clone), "q2_0")
+            # A clone with nothing readable in it is reported, not guessed at.
+            self.assertIsNone(build_api.quant_from_choices(["--context", "32768"],
+                                                           clone / "no-such-clone"))
+
+    def test_a_build_started_from_the_card_is_named_for_the_model_it_built(self):
+        class SilentBuild(BuildJob):
+            def _run(self, tag: str, options: dict[str, Any], quant: str | None = None) -> None:
+                pass
+
+        job = SilentBuild()
+        status = job.start("v0.1.45", {}, None, ["--model", "IQ2_XS", "--context", "32768"])
+        self.assertEqual(status["quant"], "iq2_xs",
+                         "the build was not stored for the model the card named")
+        self.assertEqual(status["choices"], {"--model": "IQ2_XS", "--context": "32768"},
+                         "the status does not say what the build was asked for")
+
+        named = SilentBuild()          # a second job: one build may not start inside another
+        named.state = "idle"
+        status = named.start("v0.1.45", {}, "q2_0", ["--model", "IQ2_XS"])
+        self.assertEqual(status["quant"], "q2_0",
+                         "the quant box is the explicit answer and beats the model box")
+
 
 if __name__ == "__main__":
     unittest.main()

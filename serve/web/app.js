@@ -1017,7 +1017,7 @@ function hookState(b) {
   stop.hidden = b.state !== "running";
   run.disabled = b.state === "running";
   const msg = $("strata-hook-msg");
-  if (b.state === "running") msg.textContent = `running for ${b.elapsed_s}s - the log below is the setup script's own output`;
+  if (b.state === "running") msg.textContent = `running for ${b.elapsed_s}s - the log below is the setup script's own output` + (b.data_dir ? `; model files go to ${b.data_dir}` : "");
   else if (b.state === "done") msg.textContent = `finished (exit ${b.exit_code})`;
   else if (b.state === "failed") msg.textContent = `failed (exit ${b.exit_code})`;
   else if (b.state === "cancelled") msg.textContent = "stopped";
@@ -2439,9 +2439,18 @@ function renderVersions(active) {
     const opt = document.createElement("option");
     opt.value = v.key;
     opt.textContent = versionLabel(v) + (v.ready ? "" : " (no engine binary)") + (v.active ? " - running" : "");
+    if (v.startable === false) {
+      // A config the app cannot start is shown greyed with the reason: the box then
+      // matches the files on disk instead of hiding one the user can see.
+      opt.disabled = true;
+      opt.textContent += ` (${v.reason || "not startable"})`;
+    }
     sel.appendChild(opt);
   }
-  sel.value = (active || versions[0]).key;
+  // A disabled option cannot be chosen in a browser, so the box opens on the first
+  // version that can actually be started.
+  const shown = active || versions.find((v) => v.startable !== false) || versions[0];
+  sel.value = shown.key;
   const quantField = $("build-quant");
   if (quantField && !quantField.value) quantField.value = (active && (active.quant || active.key)) || "";
 }
@@ -2611,11 +2620,31 @@ function loadBuild() {
     // s.latest is the listing ({repo, releases, checked_at} or {error, releases: []});
     // s.newest is the single release the update note points at.
     const releases = (s.latest && s.latest.releases) || [];
+    const local = (s.local || []).filter((r) => r.has_setup || r.has_cmake);
+    localCheckouts = local;
     // main is always a valid build target (tools/build_engine.sh defaults to it), so the
     // box is never empty - a machine with no network can still build from source.
-    $("build-tag").innerHTML = releases.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)}</option>`).join("") +
+    // The checkouts this machine already has come first, because they are the trees a
+    // build here would use: the ones under tmp/, then the ones serve/strata_hook.py would
+    // find (a Strata the user keeps elsewhere). A folder's name is the tag it was cloned
+    // at and its CMakeLists.txt may declare a different version (tmp/strata-v0.2.0-beta
+    // declares 0.1.45.3), so both are shown and the value sent is the tag the scan
+    // reported. A tree outside tmp/ shows its folder, since its name is not a tag.
+    $("build-tag").innerHTML =
+      (local.length ? `<optgroup label="checkouts on this machine (${local.length})">` +
+        local.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)}` +
+          (r.version && r.version !== r.tag ? ` - ${esc(r.version)}` : "") +
+          (r.source && r.source !== "tmp" ? ` (${esc(r.folder)})` : "") + `</option>`).join("") +
+        `</optgroup>` : "") +
+      (releases.length ? `<optgroup label="published releases">` +
+        releases.map((r) => `<option value="${esc(r.tag)}">${esc(r.tag)}</option>`).join("") +
+        `</optgroup>` : "") +
       `<option value="main">main (the current source)</option>`;
-    if (!releases.length) {
+    if (!releases.length && local.length) {
+      const why = s.latest && s.latest.error ? String(s.latest.error).split("\n")[0] : "no published releases";
+      $("build-update-note").textContent = `GitHub gave no releases (${why}). The ${local.length} `
+        + `checkout${local.length === 1 ? "" : "s"} on this machine can still be built from.`;
+    } else if (!releases.length) {
       const why = s.latest && s.latest.error ? String(s.latest.error).split("\n")[0] : "no published releases";
       $("build-update-note").textContent = `GitHub gave no releases (${why}). main can still be built from source.`;
     } else {
@@ -2630,6 +2659,7 @@ function loadBuild() {
     refreshBuildStatus();
   }).catch((e) => {
     $("build-tag").innerHTML = `<option value="main">main (the current source)</option>`;
+    localCheckouts = [];
     $("build-update-note").textContent = `could not read the build status: ${String(e.message || e)}`;
     // The choices card starts hidden and is only opened by renderBuildChoices. If the
     // status call itself failed, nothing would open it and the tab would look like it
@@ -2656,20 +2686,32 @@ const IMAGE_DEPENDENT_FLAGS = new Set([
   "--vision-tokens"
 ]);
 const IMAGE_OFF_VALUES = new Set(["no", "none", "off"]);
-const DEFAULT_OFF_FLAGS = new Set([
-  "--vision", "--images", "--image-native", "--experimental-speed-projection"
-]);
+/* Flags whose off value is what setup.py does without being told, so saying it is
+   redundant. In 0.1.45 that was true of --vision and --images. In 0.2.0 vision is on
+   by default wherever the model can read pictures, so an off value has to be said out
+   loud or the setup turns vision on behind the user. Only the experimental projection
+   is still off in the release itself. */
+const DEFAULT_OFF_FLAGS = new Set(["--experimental-speed-projection"]);
 
 function isOffValue(value) {
   return IMAGE_OFF_VALUES.has(String(value || "").toLowerCase());
 }
 
+/* What a box is preselected to. The release's own default when it declares one; when
+   it does not - --vision is "on by default where the model can", which depends on the
+   card and the pack - the box is left unset so setup.py decides for this machine.
+   Preselecting the off value here would make every build text-only on a box where the
+   user never touched the card, which is not what the release does. */
 function defaultChoiceValue(c) {
-  if (c.default !== null && c.default !== undefined) return c.default;
-  if (c.flag === "--vision" || c.flag === "--images") {
-    return (c.choices || []).find((v) => IMAGE_OFF_VALUES.has(String(v).toLowerCase())) || "";
-  }
-  return "";
+  return (c.default === null || c.default === undefined) ? "" : c.default;
+}
+
+/* The widest entry a box can hold, counting the "not set" option the renderer adds.
+   app.css uses it as the sizing floor for a browser without fit-content. */
+function longestOption(c) {
+  const values = (c.choices || []).map((v) => String(v));
+  if (defaultChoiceValue(c) === "") values.push("not set");
+  return values.reduce((m, v) => Math.max(m, v.length), 0);
 }
 
 function choiceField(c) {
@@ -2677,7 +2719,7 @@ function choiceField(c) {
   if (c.choices && c.choices.length) {
     const selected = defaultChoiceValue(c);
     const emptyOption = selected === "" ? `<option value="" selected>not set</option>` : "";
-    return `<label>${esc(name)}<select data-flag="${esc(c.flag)}">` +
+    return `<label>${esc(name)}<select data-flag="${esc(c.flag)}" data-longest="${longestOption(c)}" style="--choice-chars:${longestOption(c)}">` +
       emptyOption +
       c.choices.map((v) => `<option value="${esc(v)}"${v === selected ? " selected" : ""}>${esc(v)}</option>`).join("") +
       `</select><code>${esc(c.flag)}</code>${c.help ? `<span class="muted small">${esc(c.help)}</span>` : ""}</label>`;
@@ -2737,26 +2779,51 @@ function choiceCommand() {
   return ["python setup.py", ...args, ...HOOK_FLAGS.filter((f) => !args.includes(f))].join(" ");
 }
 
+/* Which quant a build or an install is stored under. The box in the releases card is
+   the explicit answer; left empty, the model the Setup choices name is the answer, so
+   "Clone and build from source" builds the model the card is set up for instead of
+   dropping an unnamed engine into engine/. */
+function buildTargetQuant() {
+  const box = $("build-quant");
+  const named = box ? String(box.value || "").trim() : "";
+  if (named) return named;
+  const model = document.querySelector('#build-choices-groups [data-flag="--model"]');
+  return model ? String(model.value || "").trim() : "";
+}
+
 function renderBuildChoices(setup, tag, error) {
   const card = $("build-choices");
   if (!card) return;
   const groups = (setup && setup.groups) || {};
   const shown = CHOICE_ORDER.filter((g) => (groups[g] || []).length);
+  // The card names the release the flags were read from. That is not always the engine
+  // that is installed: the payload can come from the manifest of a build of another
+  // release, which is what made the card say one version and list another's choices.
+  // setup.version is what that release declares - a checkout named strata-v0.2.0-beta can
+  // declare 0.1.45.3 - so it wins over the tag it was fetched as, and the tag passed in is
+  // the fallback for a payload that carries no release of its own.
+  const name = (setup && (setup.version || setup.tag)) || tag;
+  const source = (setup && setup.from) || "";
+  const sourceLine = $("build-choices-source");
   if (!shown.length) {
     card.hidden = false;
-    $("build-choices-tag").textContent = tag;
+    $("build-choices-tag").textContent = name;
     $("build-choices-groups").innerHTML = "";
     $("build-choices-rest").textContent = error
-      ? `${error} The choices for ${tag} are unknown until that release is read.`
-      : `${tag} has no setup.py choice lists.`;
+      ? `${error} The choices for ${name} are unknown until that release is read.`
+      : `${name} has no setup.py choice lists.`;
+    if (sourceLine) sourceLine.textContent = source ? `Read from ${source}.` : "";
     $("build-choices-command").textContent = "";
     return;
   }
   card.hidden = false;
-  $("build-choices-tag").textContent = tag;
+  $("build-choices-tag").textContent = name;
+  if (sourceLine) sourceLine.textContent = source ? `Read from ${source}, not from a list we maintain.` : "";
   $("build-choices-groups").innerHTML = shown.map((g) =>
+    /* The title is a heading, so it sits outside the grid: inside it would be a grid item
+       and would take a row and a share of every track, which offsets the boxes below. */
     `<div class="build-choices-group"><span class="build-choices-group__title">${esc(CHOICE_TITLE[g] || g)}</span>` +
-    groups[g].map(choiceField).join("") + `</div>`).join("");
+    `<div class="build-choices-grid">` + groups[g].map(choiceField).join("") + `</div></div>`).join("");
   const listed = shown.reduce((n, g) => n + groups[g].length, 0);
   const rest = (setup.total || 0) - listed;
   $("build-choices-rest").textContent = rest > 0
@@ -2795,6 +2862,10 @@ comes from the job itself - setup.py's own "=== Step N: ... ===" markers, or the
 job's own state - never from a list maintained here. */
 let setupOffset = 0, setupTimer = null;
 let setupState = "idle", sourceState = "idle";
+// The checkouts the last build status reported, so the release the boxes were read from
+// can be named in the request that starts the setup: without it the hook searches for a
+// checkout and can end up running a different release's setup.py than the one selected.
+let localCheckouts = [];
 const IDLE_LABEL = { setup: "Run setup with these", source: "Clone and build from source" };
 const SOURCE_STAGE = {
   cloning: "cloning the release", configuring: "configuring with cmake",
@@ -2882,14 +2953,29 @@ $("setup-run").addEventListener("click", async () => {
     return;
   }
   const args = activeBuildArgs();
+  // When the selected release is a checkout this machine has, name it: the hook otherwise
+  // searches for a checkout, and the setup it runs can be a different release than the one
+  // the boxes above were read from.
+  const chosen = localCheckouts.find((r) => r.tag === $("build-tag").value);
   $("build-choices-note").textContent = "starting the setup hook ...";
   try {
-    const r = await fetch("config/strata-hook", { method: "POST", headers: headers(true), body: JSON.stringify({ args })});
+    const r = await fetch("config/strata-hook", { method: "POST", headers: headers(true),
+      body: JSON.stringify({ args, path: chosen ? chosen.folder : "" })});
     const b = await r.json();
     if (!r.ok) { toast("error", "The setup hook did not start", (b.error || "").trim() || `HTTP ${r.status}`, 8000); return; }
     // Say which folder is being set up: the hook runs the Strata checkout this machine
-    // has, which is not necessarily the release the boxes above were read from.
-    $("build-choices-note").textContent = `setup.py is running in ${b.checkout || "the Strata folder"}, logging to ${b.log}`;
+    // has, which is not necessarily the release the boxes above were read from. When that
+    // checkout is the clone tmp/ keeps, the packs are pinned to a folder the next build
+    // does not delete, so say where they went. A flag this setup.py does not declare was
+    // dropped by the hook, and the line under the boxes is replaced by the one that runs.
+    const dropped = (b.dropped || []).filter(Boolean);
+    $("build-choices-note").textContent = `setup.py is running in ${b.checkout || "the Strata folder"}`
+      + (b.data_dir ? `, model files go to ${b.data_dir}` : "")
+      + (dropped.length ? `, ${dropped.join(" ")} dropped: this setup.py does not accept them` : "")
+      + `, logging to ${b.log}`;
+    if (dropped.length && Array.isArray(b.command)) {
+      $("build-choices-command").textContent = `python ${b.command.slice(1).join(" ")}`;
+    }
     setupOffset = 0;
     renderBuildStatus(b, "setup");
     clearInterval(setupTimer);
@@ -2950,7 +3036,8 @@ $("build-fetch").onclick = async () => {
   const r = await fetch("build/fetch-prebuilt", {
     method: "POST", headers: headers(true),
     body: JSON.stringify({ tag: $("build-tag").value,
-                          quant: ($("build-quant") ? $("build-quant").value.trim() : "") })});
+                          quant: buildTargetQuant(),
+                          choices: activeBuildArgs() })});
   const out = await r.json();
   if (out.ok && out.quant) {
     $("build-update-note").textContent = `Installed ${out.version} as model version ${out.quant} in ${out.engine_dir}. ` +
@@ -2976,10 +3063,14 @@ $("build-start").onclick = async () => {
   }
   const options = {};
   document.querySelectorAll("[data-opt]").forEach((el) => { options[el.dataset.opt] = el.value; });
+  // The Setup choices go with the build: the run config the build writes is copied from
+  // the nearest config on the box, so without these the build runs on that file's
+  // context and KV cache whatever the boxes above said.
   const r = await fetch("build/start", {
     method: "POST", headers: headers(true),
     body: JSON.stringify({ tag: $("build-tag").value, options,
-                          quant: ($("build-quant") ? $("build-quant").value.trim() : "") })});
+                          quant: buildTargetQuant(),
+                          choices: activeBuildArgs() })});
   const job = await r.json();
   renderBuildLog(job);
   renderBuildStatus(job, "source");

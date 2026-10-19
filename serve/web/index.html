@@ -362,7 +362,7 @@
          release's own setup.py before anything is cloned or built. -->
     <div class="st-card build-choices" id="build-choices" hidden>
       <span class="card-title">Setup choices for <span id="build-choices-tag">this release</span></span>
-      <p class="muted small">Read from the release's own setup.py, not from a list we maintain. Nothing is
+      <p class="muted small" id="build-choices-source">Read from the release's own setup.py, not from a list we maintain. Nothing is
         built or downloaded yet: these are what that release can be set up for.</p>
       <div id="build-choices-groups"></div>
       <p class="muted small" id="build-choices-rest"></p>
@@ -389,15 +389,19 @@
     </div>
 
     <div class="st-card build-releases">
-      <span class="card-title">Available releases</span>
+      <span class="card-title">Build from</span>
+      <!-- Two groups: the checkouts already under tmp/ (the scan in
+           serve/build_api.py:local_releases) and the releases GitHub publishes. A folder
+           named for one tag can declare another version, so the option shows both. -->
       <select id="build-tag"></select>
       <!-- A build named by quant is stored in engine/engine_<quant> with its own run
-         config, and can then be started from the Model version dropdown. Left empty, it
-         is the default engine in engine/. -->
+         config, and can then be started from the Model version dropdown. Left empty, the
+         model named in the Setup choices above is the quant; with neither, the build is
+         the default engine in engine/. -->
       <label class="build-quant" for="build-quant">
         <span class="muted small">Build for quant</span>
-        <input id="build-quant" type="text" placeholder="q2_0" autocomplete="off" spellcheck="false"
-               title="Store this engine in engine/engine_&lt;quant&gt; and write config/run-&lt;quant&gt;.json for it. Leave empty for the default engine.">
+        <input id="build-quant" type="text" placeholder="the model in the Setup choices" autocomplete="off" spellcheck="false"
+               title="Store this engine in engine/engine_&lt;quant&gt; and write config/run-&lt;quant&gt;.json for it. Left empty, the model named in the Setup choices is used; with neither, this is the default engine.">
       </label>
       <div class="build-actions">
         <button class="st-btn st-btn--primary" id="build-fetch" type="button">Install ready-made engine</button>

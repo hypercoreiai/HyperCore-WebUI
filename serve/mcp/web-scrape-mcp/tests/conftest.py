@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
-
 from webscrape.config import Settings
 
 

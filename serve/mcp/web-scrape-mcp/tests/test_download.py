@@ -1,12 +1,12 @@
 import asyncio
 from pathlib import Path
 
-from webscrape.config import Settings
 from webscrape import service
-from webscrape.sandbox import sanitize_filename
+from webscrape.config import Settings
 from webscrape.errors import ACCESS_DENIED, ScrapeError
+from webscrape.sandbox import sanitize_filename
 
-from conftest import send_bytes, send_redirect, send_status, jpeg_bytes
+from conftest import send_bytes, send_redirect, send_status
 
 
 def test_download_jpeg(settings: Settings, http_server, jpeg: bytes):

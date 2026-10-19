@@ -165,7 +165,7 @@ class DirectEngine:
                 continue
             try:
                 with open(path, "r", errors="replace") as f:
-                    tail = [l.rstrip("\n") for l in f if l.strip()]
+                    tail = [line.rstrip("\n") for line in f if line.strip()]
                 break
             except OSError:
                 continue
@@ -186,7 +186,7 @@ class DirectEngine:
         joined = " ".join(tail).lower()
         for marker in PATH_MARKERS:
             if marker in joined:
-                bad = [l.strip() for l in tail if any(m in l.lower() for m in PATH_MARKERS)]
+                bad = [line.strip() for line in tail if any(m in line.lower() for m in PATH_MARKERS)]
                 return ("\n  the run config points at files that are not on this machine:\n  "
                         + "\n  ".join(bad[:4])
                         + "\n  put the real paths in the config (Config view, or the "
@@ -212,7 +212,7 @@ class DirectEngine:
                 return True
             log = open(self.log_path, "ab") if self.log_path else subprocess.DEVNULL
             if not self.log_path:                      # no log named by the config: keep the engine's
-                import tempfile                        # own words somewhere we can read back
+                import tempfile  # own words somewhere we can read back
                 fd, self._temp_log = tempfile.mkstemp(prefix="strata-", suffix=".log")
                 os.close(fd)
                 log = open(self._temp_log, "ab")

@@ -44,6 +44,7 @@ ENGINE_ORDER = ("invisible_playwright", "camoufox", "playwright")
 DEFAULT_PAGE_CHARS = 12000
 DEFAULT_TIMEOUT_MS = 30000
 WORKER_TIMEOUT_S = 80.0   # under the hub's timeout_s: a slow page returns an error, not a killed call
+STDIO_DRAIN_S = 20.0      # how long stdio waits for a call thread to write its reply before exiting
 LINK_DEFAULT = 40
 LINK_MAX = 60
 
@@ -535,6 +536,7 @@ def stdio():
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")
     out = threading.Lock()
+    in_flight: list[threading.Thread] = []
 
     def answer(msg):
         reply = handle(msg)
@@ -553,10 +555,17 @@ def stdio():
             except ValueError:
                 continue
             if msg.get("method") == "tools/call":
-                threading.Thread(target=answer, args=(msg,), daemon=True).start()
+                # A call can take as long as a page load, so it runs on its own thread and
+                # stdin keeps being read. The reply is only guaranteed to reach the client
+                # if the thread is still alive when stdin closes, so each one is tracked.
+                thread = threading.Thread(target=answer, args=(msg,), daemon=True)
+                thread.start()
+                in_flight.append(thread)
             else:
                 answer(msg)
     finally:
+        for thread in in_flight:
+            thread.join(timeout=STDIO_DRAIN_S)
         SESSION.close()
 
 

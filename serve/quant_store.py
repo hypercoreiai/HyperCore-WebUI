@@ -82,6 +82,16 @@ QUANT_IN_TEXT = re.compile(r"\b(?:iq|q)\d(?:_[a-z0-9]+)*\b", re.IGNORECASE)
 
 DEFAULT_KEY = "default"
 
+#: The shipped template in config/. It is a shape, not a run config: run.sh refuses to
+#: pick it, and a build must never write into it. A quant name that happens to be the
+#: word "example" would make the build's target this very file.
+TEMPLATE_NAME = "run-example.json"
+
+#: #549: the server keeps a config's Chat settings beside it as
+#: strata-<model>.shared-settings.json. It matches the model-config pattern but is no
+#: config, so a scan for a quant skips it.
+SHARED_SETTINGS_SUFFIX = ".shared-settings.json"
+
 #: The run config a build writes when this box has no run config to copy from.
 #: config/run-example.json is the shipped template, but nothing guarantees it is
 #: there: a fresh clone, a config/ the user cleared, a checkout that never carried it.
@@ -185,6 +195,45 @@ def quant_from_config(cfg: dict) -> str | None:
     return None
 
 
+def quant_from_checkout(root: Path) -> str | None:
+    """The quant a run of setup.py chose, read from what it wrote inside the checkout.
+
+    setup.py writes its run config beside itself, named for the model it set up:
+    strata-<model>.json, and the model name carries the size it picked
+    (qwen3.8-flash-next-iq2_xs). The Build tab's model box can name a model rather than a
+    quant, or be left unset when the release decides the size per model, so this file is
+    the only place the quant the run used is written - and it is what the store has to be
+    keyed by. A shared-settings file beside a config is not a config (#549), so it is
+    skipped. When no config can be read, the start script setup.py names for the quant
+    (run-<quant>.sh) is the fallback.
+
+    Returns None when the checkout names no quant: the caller reports that rather than
+    guessing at a store folder.
+    """
+    root = Path(root).resolve()
+    for path in sorted(root.glob("strata-*.json")):
+        if path.name.endswith(SHARED_SETTINGS_SUFFIX):
+            continue
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        key = quant_from_config(cfg)
+        if key:
+            return key
+    for path in sorted(root.glob("run-*.*")):
+        stem = path.name.rpartition(".")[0]
+        if not stem.startswith("run-"):
+            continue
+        try:
+            return normalise_quant(stem[len("run-"):])
+        except ValueError:
+            continue
+    return None
+
+
 def store_dir(quant: Any) -> Path:
     """engine/engine_<quant>/, the folder one build lives in."""
     return ENGINE_DIR / f"{STORE_PREFIX}{normalise_quant(quant)}"
@@ -208,6 +257,34 @@ def engine_binary(quant: Any) -> Path:
 def is_artifact(name: str) -> bool:
     """A file an engine build produces that has to travel with it."""
     return name in BINARIES or bool(SIDE_LIB.match(name))
+
+
+#: Where a run of setup.py leaves its outputs inside a checkout: cmake's build folder,
+#: the vision build folder, and the engine folder setup.py copies binaries into. These
+#: are the folders `harvest_setup_run` reads, and they are inside the clone, not inside
+#: the store.
+BUILD_DIRS = ("build", "build-vision", "engine")
+
+
+def build_artifacts(source_root: Path) -> list[Path]:
+    """Every engine artifact inside a checkout, in a stable order.
+
+    One file per name: a checkout can hold the same binary in build/ and in engine/, and
+    the first one found is the one the run produced. Nothing outside `source_root` is
+    looked at.
+    """
+    root = Path(source_root).resolve()
+    out: list[Path] = []
+    seen: set[str] = set()
+    for name in BUILD_DIRS:
+        place = root / name
+        if not place.is_dir():
+            continue
+        for path in sorted(place.rglob("*")):
+            if path.is_file() and is_artifact(path.name) and path.name not in seen:
+                out.append(path)
+                seen.add(path.name)
+    return out
 
 
 # ---------------------------------------------------------------- the index
@@ -326,6 +403,38 @@ def _run_configs() -> list[dict[str, Any]]:
         named = 0 if key and (key in c["name"] or key in c["model_name"]) else 1
         return (c["quant"] is None, named, c["name"], c["model_name"])
     out.sort(key=rank)
+    return out
+
+
+def template_configs() -> list[dict[str, Any]]:
+    """config/*.json that are run configs but whose model paths are still placeholders.
+
+    These are the configs the Build tab wrote before the model files arrived, and the
+    template run.sh refuses to pick. They are not in _run_configs() because an engine
+    handed one starts on a file that does not exist. They are still worth listing: the
+    dropdown can show them with the reason instead of hiding a config the user can see on
+    disk and cannot explain.
+    """
+    out: list[dict[str, Any]] = []
+    if not CONFIG_DIR.is_dir():
+        return out
+    for path in sorted(CONFIG_DIR.glob("*.json")):
+        if path.name == "build_options.json" or path.name.endswith(".bak"):
+            continue
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(cfg, dict) or TEMPLATE_MARKER not in json.dumps(cfg):
+            continue
+        out.append({
+            "path": str(path),
+            "name": path.name,
+            "model_name": str(cfg.get("model_name") or ""),
+            "quant": quant_from_config(cfg),
+            "startable": False,
+            "reason": "its model paths are still placeholders",
+        })
     return out
 
 
@@ -711,6 +820,13 @@ def select(quant: Any) -> dict[str, Any]:
     if entry is None:
         cfg = next((c for c in _run_configs() if c["quant"] == key), None)
         if cfg is None:
+            template = next((c for c in template_configs() if c["quant"] == key), None)
+            if template is not None:
+                # The config is listed in the dropdown, so a request for it has to say why
+                # it cannot be started rather than look like a missing version.
+                raise ValueError(f"model version {key} is only a template: {template['name']} "
+                                 f"{template['reason']}, so an engine started from it would "
+                                 "report a missing model shard. Fill the paths in or build the quant.")
             stored = ", ".join(sorted(data["versions"])) or "none"
             raise ValueError(f"no model version {key} is available. "
                             f"Engine builds stored: {stored}. "
@@ -897,6 +1013,191 @@ def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | Non
         cfg["_note"] = _written_note(key, cfg)
         changes.append("_note -> written by the Build tab")
     return changes
+
+
+# ---------------------------------------------------------------- the Setup choices
+#: The Setup-choice flags that have a place in a run config, and where they go:
+#: ("args", flag) is an engine argument, a bare name is a field the server reads.
+#
+#: The flags not here are left to setup.py on purpose: --vision/--images/--image-quant
+#: choose which encoder to build and which mmproj to download, --data-dir and
+#: --gguf-dir say where files go, --model and --family name the model the build is
+#: for. A run config written by a build has no part in those decisions, so writing
+#: them here would put settings in the config that nothing reads.
+RUN_CHOICE_FIELDS: dict[str, tuple[str, str] | str] = {
+    "--context": ("args", "--max-context"),
+    "--kv": ("args", "--kv"),
+    "--rope-scaling": ("args", "--rope-scaling"),
+    "--rope-scale": ("args", "--rope-scale"),
+    "--vram-reserve-mib": ("args", "--vram-reserve-mib"),
+    "--parallel": "parallel",
+    "--port": "port",
+    "--host": "host",
+    "--api-key": "api_key",
+    "--gpu": "gpu",
+}
+
+
+def choice_map(args: Any) -> dict[str, str]:
+    """The Setup choices as {flag: value}, from the flat list the Build tab sends.
+
+    The card's boxes become ["--context", "32768", "--kv", "int8"]; the same list the
+    setup hook gets. A flag with nothing after it keeps an empty value, so a bare
+    switch is not mistaken for the value of the flag before it.
+    """
+    items = [str(a) for a in (args or [])]
+    out: dict[str, str] = {}
+    i = 0
+    while i < len(items):
+        flag = items[i].strip()
+        if not flag.startswith("--"):
+            i += 1
+            continue
+        value = ""
+        if i + 1 < len(items) and not items[i + 1].startswith("--"):
+            value = items[i + 1].strip()
+            i += 2
+        else:
+            i += 1
+        out[flag] = value
+    return out
+
+
+def _set_arg(args: list[str], flag: str, value: str) -> bool:
+    """Put `flag value` in an engine argument list, replacing the value it already has.
+
+    Returns whether the list changed. A flag written twice is not added a second time:
+    the first value is the one the engine sees, so overwriting it in place is what a
+    person changing the box expects.
+    """
+    if flag not in args:
+        args.extend([flag, value])
+        return True
+    at = args.index(flag)
+    if at + 1 >= len(args):
+        args.append(value)
+        return True
+    if str(args[at + 1]).startswith("--"):
+        args.insert(at + 1, value)      # the flag was written bare; give it its value
+        return True
+    if str(args[at + 1]) == value:
+        return False
+    args[at + 1] = value
+    return True
+
+
+def apply_run_choices(cfg: dict[str, Any], choices: Any) -> list[str]:
+    """Write the Build tab's Setup choices into a run config, and say what changed.
+
+    `choices` is the flat flag/value list the card sends or a {flag: value} dict. An
+    empty box is not a choice and leaves the config as it was; a flag with no entry in
+    RUN_CHOICE_FIELDS is not written. Returns the changes, e.g. ["--max-context 262144"].
+    """
+    if isinstance(choices, (list, tuple)):
+        choices = choice_map(choices)
+    changes: list[str] = []
+    for flag, target in RUN_CHOICE_FIELDS.items():
+        value = str((choices or {}).get(flag, "")).strip()
+        if not value:
+            continue
+        if isinstance(target, tuple):
+            args = cfg.get("args")
+            if not isinstance(args, list):
+                args = []
+                cfg["args"] = args
+            if _set_arg(args, target[1], value):
+                changes.append(f"{target[1]} {value}")
+            continue
+        stored: Any = value
+        if value.isdigit():
+            stored = int(value)      # a port or a GPU number, not a string
+        if cfg.get(target) == stored:
+            continue
+        cfg[target] = stored
+        changes.append(f"{target} {stored}")
+    return changes
+
+
+def apply_build_choices(quant: Any, choices: Any) -> tuple[Path | None, list[str]]:
+    """Point one quant's run config at the settings the Setup choices hold.
+
+    A build writes config/run-<quant>.json by copying the nearest run config on the box
+    (the shipped template when there is none), which carries that file's context and KV
+    cache whatever the boxes said. This is the step that makes the boxes mean something:
+    the choices are written into the config the build just wrote. Returns (path, changes),
+    or (None, []) when there is no config for that quant to write.
+    """
+    target = _config_for_quant(normalise_quant(quant))
+    if target is None or not target.is_file():
+        return None, []
+    try:
+        cfg = json.loads(target.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None, []
+    if not isinstance(cfg, dict):
+        return None, []
+    changes = apply_run_choices(cfg, choices)
+    if not changes:
+        return target, []
+    try:
+        _write_json(target, cfg)
+    except OSError:
+        return None, []
+    return target, changes
+
+
+def harvest_setup_run(source_root: Path, quant: Any, choices: Any = None,
+                      meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Move what a run of setup.py produced inside a checkout into the project store.
+
+    setup.py writes into the folder it is run from: binaries into build/ and engine/, the
+    runtime files into data/, the run scripts beside itself. When that folder is the clone
+    in tmp/, everything the run produced stays inside tmp/ - the folder the next build may
+    delete - and config/ and engine/engine_<quant>/ get nothing, so the Model version
+    dropdown has nothing to point at. This is the step that puts them where the app reads
+    them: binaries in engine/engine_<quant>/, the run config in config/, the runtime files
+    in engine/engine_<quant>/data/, and the store's active pointer moved to that build.
+
+    Every path written is under this project's root, the same contract the rest of this
+    module keeps. Returns the report; `stored` is the files placed, `changes` the settings
+    the Setup choices wrote, `note` whatever could not be done.
+    """
+    root = Path(source_root).resolve()
+    try:
+        key = normalise_quant(quant)
+        source = "the card"
+    except ValueError:
+        # `quant` is what the card named, and that can be a model rather than a size: the
+        # model box holds the model the release lists, and setup.py picks the size itself
+        # when the box is left unset. The run config setup.py wrote inside the checkout is
+        # where the size it actually used is written, so the store is keyed by that.
+        key = quant_from_checkout(root)
+        source = "the run config the setup wrote in the clone"
+    if not key:
+        return {"quant": None, "stored": [], "config": None, "changes": [], "data": 0,
+                "note": (f"nothing stored: the run named no quant ({quant!r} is not a quant "
+                         f"name) and {root} holds no run config to read one from, so there is "
+                         "no engine/engine_<quant>/ to write and no run config to point at "
+                         "it. Name a model in the card, or pick one in the Model version "
+                         "dropdown.")}
+    sources = build_artifacts(root)
+    if not sources:
+        return {"quant": key, "stored": [], "config": None, "changes": [], "data": 0,
+                "note": "the run produced no engine binary in the checkout, so nothing was stored"}
+    meta = dict(meta or {})
+    meta.setdefault("label", key)
+    entry = store_binaries(key, sources, meta)
+    # The clone's data/ first: ensure_run_config carries it too, and the first call is
+    # the one that has the files, so the count reported here is the one the run made.
+    carried = carry_data_dir(key, root)
+    config, note = ensure_run_config(key, source_root=root)
+    _written, applied = apply_build_choices(key, choices)
+    chosen = select(key)
+    return {"quant": key, "quant_source": source,
+            "stored": sorted(entry["files"]),
+            "config": str(config) if config else None, "changes": list(applied),
+            "data": len(carried), "note": note or "",
+            "active": bool(chosen.get("active")), "active_note": chosen.get("note") or ""}
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -1086,6 +1387,19 @@ def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path
     target = CONFIG_DIR / f"run-{key}.json"
     if not _under(CONFIG_DIR, target):
         return None, f"{target} is outside the config directory"
+    if target.name == TEMPLATE_NAME:
+        # The template is the shape a config is built from, not a config itself. Writing
+        # here would replace the shipped placeholders with this box's paths and the file
+        # would stop being a template for anyone who copies it.
+        return None, (f"{CONFIG_DIR / TEMPLATE_NAME} is the shipped template, not a run "
+                      f"config for a quant: a build named {key} writes config/run-{key}.json")
+    #: config/ is normally there already, but the first build on a fresh tree has
+    #: nothing to write into, and the harvest is what creates the run config for it.
+    if not CONFIG_DIR.is_dir():
+        try:
+            CONFIG_DIR.mkdir(parents=True)
+        except OSError as exc:
+            return None, f"could not create {CONFIG_DIR}: {exc}"
 
     if target.is_file():
         try:
@@ -1111,8 +1425,8 @@ def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path
         active = index().get("active")
         chosen = next((c for c in configs if c["quant"] == active), configs[0])
         base = Path(chosen["path"])
-    elif (CONFIG_DIR / "run-example.json").is_file():
-        base = CONFIG_DIR / "run-example.json"       # the shipped template is the shape
+    elif (CONFIG_DIR / TEMPLATE_NAME).is_file():
+        base = CONFIG_DIR / TEMPLATE_NAME            # the shipped template is the shape
     else:
         base = None                                  # nothing on the box to copy
     if base is not None:
@@ -1162,7 +1476,7 @@ def _config_for_quant(key: str) -> Path | None:
     if named.is_file():
         return named
     for path in sorted(CONFIG_DIR.glob("*.json")):
-        if path.name in ("build_options.json", "run-example.json") or path.name.endswith(".bak"):
+        if path.name in ("build_options.json", TEMPLATE_NAME) or path.name.endswith(".bak"):
             continue
         try:
             cfg = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -1252,11 +1566,13 @@ def refresh_run_configs(quant: Any = None, source_root: Path | None = None) -> l
 
 
 def list_versions() -> list[dict[str, Any]]:
-    """Every model version the app can start.
+    """Every model version the app can start, plus the ones it cannot and why.
 
     A version is a quant with an engine build, or a run config that names a quant and
     uses the engine already in engine/. Both are listed: the dropdown is about what
-    the user can start, not about how many binaries were compiled.
+    the user can start, not about how many binaries were compiled. A run config whose
+    paths are still placeholders is listed too, with startable false and the reason, so
+    the box can show it greyed out instead of hiding a file the user can see on disk.
     """
     data = index()
     active = data.get("active")
@@ -1269,13 +1585,16 @@ def list_versions() -> list[dict[str, Any]]:
         named = next((c for c in configs if c["quant"] == key and c["name"] == f"run-{key}.json"),
                      None)
         cfg = named or next((c for c in configs if c["quant"] == key), None)
+        ready = bool(entry["files"].get(EXE))
         out.append({
             **entry,
             "engine_dir": str(store_dir(key)) if store_dir(key).is_dir() else entry.get("engine_dir"),
             "config": cfg["path"] if cfg else None,
             "config_name": cfg["name"] if cfg else None,
             "active": key == active,
-            "ready": bool(entry["files"].get(EXE)),
+            "ready": ready,
+            "startable": ready or cfg is not None,
+            "reason": "" if (ready or cfg) else "no run config names this quant",
         })
     for cfg in configs:
         key = cfg["quant"]
@@ -1297,6 +1616,30 @@ def list_versions() -> list[dict[str, Any]]:
             "config_name": cfg["name"],
             "active": False,
             "ready": (ENGINE_DIR / EXE).is_file(),
+            "startable": (ENGINE_DIR / EXE).is_file(),
+            "reason": "",
+        })
+    for cfg in template_configs():
+        if cfg["quant"] and any(v["quant"] == cfg["quant"] for v in out):
+            continue            # the same quant is already offered as a startable version
+        key = cfg["quant"] or DEFAULT_KEY
+        out.append({
+            "key": key,
+            "label": cfg["model_name"] or cfg["name"],
+            "quant": key,
+            "version": None,
+            "built_at": None,
+            "source": "a run config with no model files behind it",
+            "worker": (ENGINE_DIR / WORKER).is_file(),
+            "files": {},
+            "options": {},
+            "engine_dir": str(ENGINE_DIR),
+            "config": cfg["path"],
+            "config_name": cfg["name"],
+            "active": False,
+            "ready": False,
+            "startable": False,
+            "reason": cfg["reason"],
         })
     if not out and (ENGINE_DIR / EXE).is_file():
         out.append({
@@ -1304,7 +1647,7 @@ def list_versions() -> list[dict[str, Any]]:
             "version": None, "built_at": None, "source": "installed", "worker": False,
             "files": {}, "options": {}, "engine_dir": str(ENGINE_DIR),
             "config": None, "config_name": None,
-            "active": True, "ready": True,
+            "active": True, "ready": True, "startable": True, "reason": "",
         })
     return out
 

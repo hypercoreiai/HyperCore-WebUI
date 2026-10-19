@@ -27,6 +27,14 @@ from serve.chat_archive import MAX_CHAT_CHARS, OLD_CHATS_DIR, archive_chat
 STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-.+\.md$")
 NOW = datetime(2026, 10, 9, 15, 38, tzinfo=timezone.utc)
 
+#: The key the test's own mock server requires. serve/server.py takes its key from the
+#: command line or, failing that, from the run config it picks up - and a run config the
+#: Build tab wrote has "0000" in it. Naming the key on the command line keeps these
+#: tests the same on a machine that has built a quant and one that has not.
+
+
+API_KEY = "archive-test-key"
+
 
 class ArchiveChatTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -97,6 +105,7 @@ class ServerRouteTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
+        self.port = 0
 
     def tearDown(self) -> None:
         import shutil
@@ -108,6 +117,20 @@ class ServerRouteTests(unittest.TestCase):
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
+    def _call(self, path: str, body: bytes | None = None, key: str | None = API_KEY) -> tuple[int, dict]:
+        """One request to this test's server. key=None sends no credential at all."""
+        import urllib.error
+        import urllib.request
+        headers = {"Authorization": "Bearer " + key} if key else {}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=body, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
     def test_the_endpoint_writes_the_transcript(self) -> None:
         import subprocess
         import urllib.error
@@ -118,9 +141,11 @@ class ServerRouteTests(unittest.TestCase):
         stub.write_text("print('distil ok: stub builder')\n", encoding="utf-8")
         env = dict(os.environ, HYPERCORE_OLD_CHATS=str(self.tmp),
                    HYPERCORE_DISTIL_SCRIPT=str(stub))
-        proc = subprocess.Popen([sys.executable, "-m", "serve.server", "--engine", "mock", "--port", str(port)],
+        proc = subprocess.Popen([sys.executable, "-m", "serve.server", "--engine", "mock",
+                                "--port", str(port), "--api-key", API_KEY],
                                 cwd=str(ROOT), env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.port = port
         try:
             deadline = time.time() + self.STARTUP_S
             while time.time() < deadline:
@@ -134,11 +159,8 @@ class ServerRouteTests(unittest.TestCase):
                 self.skipTest(f"the mock server did not come up in {self.STARTUP_S} s")
 
             body = json.dumps({"chat": "## You\n\narchive me\n", "title": "from the button"}).encode()
-            req = urllib.request.Request(f"http://127.0.0.1:{port}/history/archive",
-                                        data=body, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=5) as r:
-                out = json.loads(r.read())
-            self.assertEqual(r.status, 200, out)
+            status, out = self._call("/history/archive", body)
+            self.assertEqual(status, 200, out)
             self.assertTrue(Path(out["path"]).exists())
             self.assertTrue(out["name"].startswith("20"), out["name"])
             self.assertEqual(Path(out["path"]).read_text(encoding="utf-8"), "## You\n\narchive me\n")
@@ -146,26 +168,23 @@ class ServerRouteTests(unittest.TestCase):
             self.assertIn("distil", out, "the archive response says nothing about the rebuild")
             self.assertTrue(out["distil"].get("queued"), out["distil"])
 
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/history/distil", timeout=10) as r:
-                status = json.loads(r.read())
-            self.assertEqual(r.status, 200, status)
+            code, status = self._call("/history/distil")
+            self.assertEqual(code, 200, status)
             self.assertTrue(status["auto"], "the status does not report the automatic pass")
             deadline = time.time() + 15
             while time.time() < deadline and status["running"]:
                 time.sleep(0.2)
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/history/distil", timeout=10) as r:
-                    status = json.loads(r.read())
+                _, status = self._call("/history/distil")
             self.assertFalse(status["running"], "the rebuild never finished")
             self.assertTrue(status["last"]["ok"], status["last"])
             self.assertIn("distil ok", status["last"]["output"])
 
-            bad = urllib.request.Request(f"http://127.0.0.1:{port}/history/archive",
-                                        data=b'{"chat": ""}', headers={"Content-Type": "application/json"})
-            try:
-                urllib.request.urlopen(bad, timeout=5)
-                self.fail("an empty chat should be refused")
-            except urllib.error.HTTPError as e:
-                self.assertEqual(e.code, 400)
+            # an empty chat is a 400, and a request with no key never reaches the writer
+            code, _ = self._call("/history/archive", b'{"chat": ""}')
+            self.assertEqual(code, 400, "an empty chat should be refused")
+            code, body = self._call("/history/archive", b'{"chat": "keyless"}', key=None)
+            self.assertEqual(code, 401, body)
+            self.assertEqual(body["error"]["type"], "authentication_error", body)
         finally:
             proc.terminate()
             proc.wait(timeout=10)
@@ -177,8 +196,9 @@ class ServerRouteTests(unittest.TestCase):
         stub.write_text("print('distil ok')\n", encoding="utf-8")
         env = dict(os.environ, HYPERCORE_OLD_CHATS=str(self.tmp), HYPERCORE_DISTIL_SCRIPT=str(stub))
         proc = subprocess.Popen([sys.executable, "-m", "serve.server", "--engine", "mock",
-                                 "--port", str(port)], cwd=str(ROOT), env=env,
+                                 "--port", str(port), "--api-key", API_KEY], cwd=str(ROOT), env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.port = port
         try:
             deadline = time.time() + self.STARTUP_S
             while time.time() < deadline:
@@ -192,9 +212,8 @@ class ServerRouteTests(unittest.TestCase):
                 self.fail("the mock server did not come up")
 
             archive_chat("## You\n\nstatus check\n", "status", Path(self.tmp), NOW)
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/history/status", timeout=10) as r:
-                status = json.loads(r.read())
-            self.assertEqual(r.status, 200, status)
+            code, status = self._call("/history/status")
+            self.assertEqual(code, 200, status)
             self.assertEqual(status["transcripts"], 1, status)
             self.assertIn("topics", status)
             self.assertIn("notes", status)

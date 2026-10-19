@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "optuna_tune"))
 
-from import_tune_history import build_seed, import_history, seed_trials  # noqa: E402
 from history import SCHEMA  # noqa: E402
+from import_tune_history import build_seed, import_history, seed_trials  # noqa: E402
 
 CFG = {"vram": 1024, "pcie": 1.0, "ple_io": "ram", "kv": "k8v4", "kvgrow": "1",
        "host_core": "last", "affinity": "auto", "worker": 0, "tail": "0",

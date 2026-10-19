@@ -30,7 +30,7 @@ check(selectorCalls.length === 0, "$ is called with a CSS selector: " + selector
 for (const id of ["build-log-card", "tune-progress-card", "tune-results-card"]) {
   check(HTML.includes(`id="${id}"`), `the page has no ${id}`);
 }
-for (const id of ["build-choices", "build-choices-groups", "build-choices-command", "build-choices-rest", "build-choices-tag"]) {
+for (const id of ["build-choices", "build-choices-groups", "build-choices-command", "build-choices-rest", "build-choices-tag", "build-choices-source"]) {
   check(HTML.includes(`id="${id}"`), `the Build tab has no ${id}`);
 }
 
@@ -58,7 +58,9 @@ for (const m of HTML.matchAll(/id="([A-Za-z0-9_-]+)"/g)) els.set(m[1], makeEl(m[
 function controlsIn(containerId) {
   const src = (els.get(containerId) || {}).innerHTML || "";
   const out = [];
-  for (const m of src.matchAll(/<select data-flag="([^"]+)">([\s\S]*?)<\/select>/g)) {
+  // choiceField puts data-longest and the --choice-chars sizing style on the select,
+  // so the attribute run between data-flag and the closing > must be allowed.
+  for (const m of src.matchAll(/<select[^>]*data-flag="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
     const opt = m[2].match(/<option value="([^"]*)" selected>/);
     out.push({ dataset: { flag: m[1] }, value: opt ? opt[1] : "" });
   }
@@ -97,6 +99,12 @@ const SETUP = {
   },
   hidden: 32,
   total: 47,
+  // What the server says the choices were read from. On this machine the flags came out of
+  // tmp/strata-v0.2.0-beta, which declares 0.1.45.3, while the installed engine is 0.1.45:
+  // the card has to name the release the flags belong to, not the one that is installed.
+  tag: "v0.2.0-beta",
+  version: "0.1.45.3",
+  from: "the checkout in tmp/strata-v0.2.0-beta",
 };
 
 // Optional second argument: a captured build/status payload, so the same checks can
@@ -173,8 +181,12 @@ setTimeout(() => {
   check(steps.length === 0, "a step inside loadBuild threw: " + JSON.stringify(steps));
   check(els.get("build-choices").hidden === false, "the setup choices card stayed hidden");
   const flags = controlsIn("build-choices-groups").map((c) => c.dataset.flag);
-  check(els.get("build-choices-tag").textContent === ((STATUS.installed || {}).version || "main"),
-        "the card does not name the release it is describing");
+  check(els.get("build-choices-tag").textContent === SETUP.version,
+        "the card does not name the release it is describing (got: " + els.get("build-choices-tag").textContent + ")");
+  check(els.get("build-choices-tag").textContent !== ((STATUS.installed || {}).version || "main"),
+        "the card titles itself with the installed engine instead of the release the choices were read from");
+  check(els.get("build-choices-source").textContent.includes("tmp/strata-v0.2.0-beta"),
+        "the card does not say which tree the choices were read from (got: " + els.get("build-choices-source").textContent + ")");
   for (const group of Object.keys(setup.groups || {})) {
     const wanted = (setup.groups[group] || []).map((c) => c.flag);
     check(wanted.every((f) => flags.includes(f)), `the card does not list the ${group} group (${wanted.join(", ")})`);

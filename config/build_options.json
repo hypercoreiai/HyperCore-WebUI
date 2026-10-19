@@ -1,7 +1,7 @@
 {
-  "source": "/home/ai-user0/HyperCore-WebUI/tmp/strata-v0.1.45",
+  "source": "/home/ai-user0/HyperCore-WebUI/tmp/strata-v0.2.0-beta",
   "project": "strata",
-  "version": "0.1.45",
+  "version": "0.1.45.3",
   "cmake_options": [
     {
       "name": "STRATA_BUILD_CONVERSATION_TESTS",
@@ -79,6 +79,13 @@
       "default": "OFF",
       "help": "Build the pointer-table prompt MMQ for STRATA_MMQ_DIRECT=1 (CUDA; ~37 MiB VRAM per GPU)",
       "visible": true
+    },
+    {
+      "name": "STRATA_MMQ_TQ_OVERLAY",
+      "kind": "bool",
+      "default": "ON",
+      "help": "Gyro trellis MMQ prompt kernels on an upstream llama.cpp: an overlay of its ggml-cuda headers written at configure time (cmake/strata_ggml_tq_overlay.cmake)",
+      "visible": false
     },
     {
       "name": "STRATA_NATIVE_EXPERTS",
@@ -167,6 +174,7 @@
         "swift",
         "coder",
         "unsloth",
+        "gyro",
         "nvfp4",
         "qwen36"
       ],
@@ -190,8 +198,11 @@
         "UD-Q5_K_XL",
         "UD-Q6_K_XL",
         "Q8_0",
+        "Gyro-S",
+        "Gyro-M",
         "NVFP4",
-        "NVFP4-NVIDIA"
+        "NVFP4-NVIDIA",
+        "NVFP4-QAD"
       ],
       "metavar": null,
       "type": null,
@@ -260,7 +271,7 @@
       "metavar": null,
       "type": null,
       "default": null,
-      "help": "let the model read images (yes = the encoder on the GPU)",
+      "help": "let the model read images (on by default where the model can; yes = the best reader for this card: the CPU under 24 GB of VRAM, the GPU from 24 GB, any make; gpu / cpu = that reader; no = text only)",
       "visible": true
     },
     {
@@ -723,6 +734,7 @@
     "batch_read_test",
     "batch_rows_parity",
     "batch_rows_test",
+    "batch_telemetry_test",
     "bf16_bits_test",
     "bf16_gemv_parity",
     "controller_test",
@@ -758,6 +770,9 @@
     "expert_profile_version_test",
     "file_expert_source_test",
     "fused_gr_bench",
+    "fusions_parity",
+    "gdn_chunk_bench",
+    "gdn_chunk_parity",
     "gdn_parity",
     "gdn_rec_parity",
     "gemm_bf16_parity",
@@ -784,6 +799,7 @@
     "hip_prefill_fused_iq",
     "hip_prefill_fused_moe",
     "hip_prefill_gemm",
+    "hip_prefill_gr_write_bench",
     "hip_prefill_hcd_exact_parity",
     "hip_prefill_hipblaslt_gemm",
     "hip_prefill_mmq_parity",
@@ -820,6 +836,7 @@
     "native_expert_bench",
     "native_expert_parity",
     "native_grouped_parity",
+    "native_hadamard_test",
     "native_mmvq_multi",
     "native_multi_parity",
     "nvfp4_avx512_parity",
@@ -827,6 +844,8 @@
     "nvfp4_expert_gpu_parity",
     "pa_bench",
     "pdl_parity",
+    "pf_wmma_parity",
+    "pin_budget_test",
     "pinned_capture",
     "pinned_shared_test",
     "platform_memory_test",
@@ -835,6 +854,7 @@
     "ple_q5_parity",
     "ple_reader_test",
     "pool_affinity_test",
+    "pool_plan_test",
     "pool_stress",
     "pool_tasks_test",
     "pool_test",
@@ -843,6 +863,7 @@
     "prefill_mmq_kquant_test",
     "prefill_mmq_scatter_test",
     "prefill_mmq_tab_test",
+    "prefill_plan_test",
     "q2_bitplane_parity",
     "q5_projection_parity",
     "q8_gemv_bench",
@@ -850,6 +871,7 @@
     "qsa_merge_daily_parity",
     "qsa_parity",
     "qsa_prompt_attn_parity",
+    "qsa_prompt_attn_sm70_bench",
     "qsa_rows_bench",
     "qsa_scores_gfx1100_parity",
     "qsa_scores_parity",
@@ -890,6 +912,7 @@
     "strata-q36",
     "strata-q36ref",
     "suffix_drafter_test",
+    "tq_cpu_parity",
     "tune_hipblaslt",
     "tune_rocblas",
     "tuning_header_arch_family_test",
@@ -899,8 +922,10 @@
   ],
   "changes": {
     "from": "0.1.45",
-    "to": "0.1.45",
-    "added_options": [],
+    "to": "0.1.45.3",
+    "added_options": [
+      "STRATA_MMQ_TQ_OVERLAY"
+    ],
     "removed_options": [],
     "changed_defaults": [],
     "added_flags": [],

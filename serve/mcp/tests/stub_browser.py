@@ -15,12 +15,14 @@ Environment the stub reads
   STUB_WEBDRIVER true|false, what navigator.webdriver reports
   STUB_GL        a WebGL renderer string, or empty for none
   STUB_TRACES    a JSON array of automation trace names the page exposes
+  STUB_DELAY_MS  milliseconds goto() spends, so a test can make a call outlive stdin
 """
 from __future__ import annotations
 
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 PNG_STUB = b"\x89PNG\r\n\x1a\n" + b"stub-image" * 6
@@ -58,6 +60,12 @@ class StubPage:
 
     def goto(self, url: str, wait_until: str = "domcontentloaded", timeout: int | None = None) -> None:
         self._same_thread()
+        raw_delay = os.environ.get("STUB_DELAY_MS", "").strip()
+        if raw_delay:
+            try:
+                time.sleep(max(0.0, int(raw_delay) / 1000.0))
+            except ValueError:
+                pass  # a malformed delay just means no delay
         self.url = url
 
     def title(self) -> str:

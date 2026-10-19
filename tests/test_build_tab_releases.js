@@ -31,12 +31,16 @@ function slice(src, from, to, what) {
 
 // ---- 1. the box exists, and the route answers from one function ---------------
 check(HTML.includes('id="build-tag"'), "the Build tab has no releases select");
-check(HTML.includes("Available releases"), "the Build tab has no releases card");
+check(HTML.includes("Build from"), "the Build tab has no build-source card");
 check(SERVER.includes('path == "/build/status"'), "GET /build/status is not routed");
 check(SERVER.includes("build_api.build_status()"), "the route does not call build_status");
 check(API.includes("def build_status() -> dict[str, Any]:"), "serve/build_api.py has no build_status");
 check(API.includes('"latest": listing'), "build_status returns the listing, not one release");
 check(API.includes('"newest": newest'), "build_status does not name the newest release");
+// The scan of tmp/ is what makes the box a choice of build sources rather than a list of
+// GitHub's tags: a machine that has built two releases has two trees on disk.
+check(API.includes("def local_releases("), "serve/build_api.py has no scan of the checkouts in tmp/");
+check(API.includes('"local": local_releases()'), "build_status does not carry the scan");
 check(APP.includes("renderBuildChoices(s.setup"), "loadBuild does not render the setup choices of the installed release");
 check(APP.includes("renderBuildStatus(s.job"), "loadBuild does not report the state of a build in progress");
 check(APP.includes("refreshBuildStatus()"), "loadBuild never asks the hook for the setup it may already be running");
@@ -77,10 +81,10 @@ function runLoadBuild(payload, fetchImpl) {
 let lastChoices = null;
 const respond = (payload) => () => Promise.resolve({ json: () => payload });
 
-function status(installed, listing, newest, update, setup, job = { state: "idle" }) {
+function status(installed, listing, newest, update, setup, job = { state: "idle" }, local = []) {
   return { installed, latest: listing, newest, update_available: update,
            options: null, setup: setup || { groups: {}, hidden: 0, total: 0 },
-           job };
+           local, job };
 }
 
 const RELEASES = [
@@ -155,6 +159,44 @@ async function main() {
   check(lastChoices && lastChoices.status && lastChoices.status.job.state === "building",
         "a build in progress is not reported to the status card");
   check(lastChoices.status.kind === "source", "the status card is not told which job it is showing");
+
+  // f) the checkouts this machine already has. A folder's name is the tag it was cloned at
+  //    and its CMakeLists.txt may declare a different version, so both are shown and the
+  //    value sent is the tag the scan reported. A folder that is not a checkout is
+  //    filtered. A tree outside tmp/ is a checkout the hook would run setup.py from, so it
+  //    is offered too and shows its folder, because its name is not a tag.
+  const LOCAL = [
+    { tag: "v0.2.0-beta", version: "0.1.45.3", folder: "tmp/strata-v0.2.0-beta", source: "tmp",
+      has_setup: true, has_cmake: true, modified: "2026-10-18T00:00:00Z" },
+    { tag: "v0.1.45", version: "0.1.45", folder: "tmp/strata-v0.1.45", source: "tmp",
+      has_setup: true, has_cmake: true, modified: "2026-10-01T00:00:00Z" },
+    { tag: "Strata", version: "0.1.45.4", folder: "~/Strata", source: "checkout",
+      has_setup: true, has_cmake: true, modified: "2026-10-19T00:00:00Z" },
+    { tag: "strata-data", version: null, folder: "tmp/strata-data", source: "tmp",
+      has_setup: false, has_cmake: false, modified: "2026-10-18T00:00:00Z" },
+  ];
+  const p = status({ version: "0.1.45", source: "local", worker: false },
+                   { repo: "x", releases: [] }, null, false, null, { state: "idle" }, LOCAL);
+  dom = runLoadBuild(p, respond(p));
+  await wait(50);
+  const localTags = optionTags(dom["build-tag"].innerHTML);
+  check(localTags.length === 4,
+        `the box has ${localTags.length} options, expected 4: the scan's three checkouts plus main (${localTags.join(", ")})`);
+  check(localTags[0] === "v0.2.0-beta" && localTags[1] === "v0.1.45",
+        `the checkouts are not first or not newest first: ${localTags.join(", ")}`);
+  check(localTags[2] === "Strata",
+        `a checkout outside tmp/ is not offered as a build source: ${localTags.join(", ")}`);
+  check(dom["build-tag"].innerHTML.includes("~/Strata"),
+        "a checkout outside tmp/ shows no folder, so the box cannot be told from a clone");
+  check(localTags[3] === "main", "the box has no main fallback when GitHub gives no releases");
+  check(dom["build-tag"].innerHTML.includes("0.1.45.3"),
+        "the option does not show the version the checkout declares, only the tag its folder is named for");
+  check(dom["build-tag"].innerHTML.includes("checkouts on this machine"),
+        "the box does not label the local checkouts as local checkouts");
+  check(dom["build-update-note"].textContent.includes("GitHub gave no releases"),
+        "the note does not say why there are no published releases");
+  check(dom["build-update-note"].textContent.includes("3 checkout"),
+        "the note does not count the checkouts that can be built from: " + dom["build-update-note"].textContent);
 
   if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }
   console.log("all release-box checks passed");

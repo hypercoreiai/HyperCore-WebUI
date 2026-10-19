@@ -61,6 +61,72 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(quant_store.quant_from_config({"args": ["--model", "m-IQ2_S.gguf"]}), "iq2_s")
         self.assertIsNone(quant_store.quant_from_config({"model_name": "no-quant-here"}))
 
+    def test_the_quant_of_a_setup_run_is_read_from_what_it_wrote_in_the_clone(self) -> None:
+        """The card's model box can name a model, or be left unset: the quant the run
+        chose is only written in the run config setup.py leaves beside itself.
+
+        That config is what keys the store for a run in the clone, so a run that named no
+        quant in its command still has a quant to be stored under.
+        """
+        clone = self.root / "tmp" / "strata-v0.1.45"
+        clone.mkdir(parents=True)
+        cfg = {"model_name": "qwen3.8-flash-next-iq2_xs",
+               "args": ["--pack", str(clone / "data" / "packs" / "iq2_xs")]}
+        (clone / "strata-qwen3.8-flash-next-iq2_xs.json").write_text(json.dumps(cfg))
+        self.assertEqual(quant_store.quant_from_checkout(clone), "iq2_xs")
+
+        # #549: a shared-settings file beside a config is not a model config, so it is
+        # not read for a quant.
+        (clone / "strata-qwen3.8-flash-next.shared-settings.json").write_text('{"chat": {}}')
+        self.assertEqual(quant_store.quant_from_checkout(clone), "iq2_xs")
+
+        # A config that names no quant falls back to the start script setup.py wrote.
+        other = self.root / "tmp" / "strata-v0.2.0-beta"
+        other.mkdir(parents=True)
+        (other / "strata-something.json").write_text('{"model_name": "no-quant-here"}')
+        (other / "run-iq3_s.sh").write_text("#!/bin/sh\n")
+        self.assertEqual(quant_store.quant_from_checkout(other), "iq3_s")
+
+        # Nothing readable, no quant: reported, not guessed at.
+        empty = self.root / "tmp" / "strata-v0.3.0"
+        empty.mkdir(parents=True)
+        self.assertIsNone(quant_store.quant_from_checkout(empty))
+
+    def test_the_whole_setup_run_in_the_clone_is_moved_into_config_and_engine(self) -> None:
+        """#549: the harvest as one run, from the clone to where the app reads it.
+
+        setup.py writes inside the clone it is run from: binaries in build/, the run config
+        beside itself, runtime files in data/. The card's model box named a model, not a
+        size, so the quant is only knowable from the config the run wrote. Everything the
+        run produced must leave tmp/ - the folder the next build may delete - and land in
+        engine/engine_<quant>/, config/run-<quant>.json, and engine/engine_<quant>/data/.
+        """
+        clone = self.root / "tmp" / "strata-v0.1.45"
+        (clone / "build").mkdir(parents=True)
+        (clone / "build" / "strata").write_bytes(b"engine")
+        (clone / "data").mkdir(parents=True)
+        (clone / "data" / "expert-profile.bin").write_bytes(b"the build's profile")
+        cfg = {"model_name": "qwen3.8-flash-next-iq2_xs",
+               "args": ["--expert-profile", str(clone / "data" / "expert-profile.bin")]}
+        (clone / "strata-qwen3.8-flash-next-iq2_xs.json").write_text(json.dumps(cfg))
+
+        report = quant_store.harvest_setup_run(clone, "qwen3.8-flash-next", None,
+                                               {"version": "0.1.45", "source": "setup-hook"})
+        self.assertEqual(report["quant"], "iq2_xs",
+                         "the harvest keyed on something other than the quant the run used")
+        self.assertTrue((self.engine / "engine_iq2_xs" / "strata").is_file(),
+                        "the binary stayed in the clone instead of engine/engine_iq2_xs/")
+        written_path = self.config / "run-iq2_xs.json"
+        self.assertTrue(written_path.is_file(), "config/ got no run config for the build")
+        written = json.loads(written_path.read_text(encoding="utf-8"))
+        self.assertEqual(written["exe"], str(self.engine / "engine_iq2_xs" / "strata"))
+        self.assertEqual(written["args"][written["args"].index("--expert-profile") + 1],
+                         str(self.engine / "engine_iq2_xs" / "data" / "expert-profile.bin"),
+                         "the config written still points inside tmp/")
+        self.assertTrue((self.engine / "engine_iq2_xs" / "data" / "expert-profile.bin").is_file(),
+                        "the runtime files stayed in the clone's data/")
+        self.assertTrue(report["active"], "the store did not move its active pointer to the build")
+
     # ---- storing a build ---------------------------------------------------
     def test_a_build_is_stored_in_a_folder_named_for_it(self) -> None:
         built = self.root / "build"
@@ -278,6 +344,54 @@ class RunConfigTests(unittest.TestCase):
         cfg = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(cfg["args"][4:6], ["--kv", "q4_0"], "--kv q4_0 is a cache format, not a model")
         self.assertEqual(cfg["port"], 8080)
+
+    def test_the_shipped_template_is_never_written_as_a_config(self) -> None:
+        """A build named "example" must not overwrite the template it is named after.
+
+        normalise_quant accepts "example" as a name, so the build's target is
+        config/run-example.json itself. That file is the shape a new config is copied
+        from and the one run.sh refuses to pick: writing this box's paths over it leaves
+        no template for anyone who copies it, and a server with no run config falls back
+        to it, so the file's contents change what the tests see.
+        """
+        template = self.config / "run-example.json"
+        template.write_text(self.BASE, encoding="utf-8")
+        before = template.read_text(encoding="utf-8")
+        path, note = quant_store.ensure_run_config("example")
+        self.assertIsNone(path, note)
+        self.assertIn("shipped template", note)
+        self.assertEqual(template.read_text(encoding="utf-8"), before,
+                         "the template was written over")
+        self.assertEqual(sorted(p.name for p in self.config.iterdir()),
+                         ["run-example.json", "run-q2_0.json"],
+                         "the guard wrote a file somewhere else")
+
+    def test_a_config_with_placeholder_paths_is_listed_with_the_reason(self) -> None:
+        """A run config the user can see on disk has to appear in the dropdown, greyed, with
+        the reason it cannot be started. Leaving it out made the box disagree with the
+        folder: the file was there and the app said there was no version."""
+        placeholder = json.loads(self.BASE)
+        placeholder["model_name"] = "qwen3.8-flash-next-iq3_xxs"
+        placeholder["args"] = ["--pack", "/ABSOLUTE/PATH/TO/packs/iq3_xxs",
+                               "/ABSOLUTE/PATH/TO/models/IQ3_XXS/model-00001-of-00002.gguf"]
+        (self.config / "run-iq3_xxs.json").write_text(json.dumps(placeholder), encoding="utf-8")
+
+        listed = quant_store.template_configs()
+        self.assertEqual([c["name"] for c in listed], ["run-iq3_xxs.json"])
+        self.assertFalse(listed[0]["startable"])
+        self.assertIn("placeholder", listed[0]["reason"])
+        self.assertNotIn("run-iq3_xxs.json", [c["name"] for c in quant_store._run_configs()],
+                         "a config with no model files behind it is offered as a startable one")
+
+        entry = next((v for v in quant_store.list_versions() if v["config_name"] == "run-iq3_xxs.json"), None)
+        self.assertIsNotNone(entry, f"the dropdown does not list the config: {quant_store.list_versions()}")
+        self.assertFalse(entry["startable"], "the dropdown is told the config can be started")
+        self.assertIn("placeholder", entry["reason"])
+
+        with self.assertRaises(ValueError) as got:
+            quant_store.select("iq3_xxs")
+        self.assertIn("placeholder", str(got.exception),
+                      "the request for it is refused as a missing version, not as an unstartable one")
 
     def test_paths_that_are_not_on_the_box_are_named_not_hidden(self) -> None:
         path, note = quant_store.ensure_run_config("IQ2_XS")

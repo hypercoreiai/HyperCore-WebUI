@@ -151,5 +151,74 @@ class ManifestTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class ReleaseManifestTests(unittest.TestCase):
+    """The manifest of a release cloned in tmp/, when one is there.
+
+    tmp/ holds the checkout a build is about to run against, so the shipped manifest
+    has to describe it: a release that adds a CMake option or a setup.py choice only
+    reaches the Build tab's dropdowns if the extractor reads it out of that clone.
+    """
+
+    CLONE = ROOT / "tmp" / "strata-v0.2.0-beta"
+    MANIFEST = ROOT / "config" / "build_options.json"
+
+    def setUp(self) -> None:
+        if not (self.CLONE / "CMakeLists.txt").is_file():
+            self.skipTest(f"no 0.2.0 clone to read in {self.CLONE}")
+        self.m = manifest(self.CLONE)
+
+    def test_the_release_version_is_read_from_its_own_CMakeLists(self) -> None:
+        self.assertEqual(self.m["version"], "0.1.45.3", "0.2.0 ships an engine at 0.1.45.3")
+
+    def test_a_new_option_shows_up_without_us_naming_it(self) -> None:
+        """The extractor reads the option out of the clone; nothing lists it by hand."""
+        names = {o["name"] for o in self.m["cmake_options"]}
+        self.assertIn("STRATA_MMQ_TQ_OVERLAY", names,
+                      "the Gyro trellis MMQ overlay is a build option of this release")
+        overlay = next(o for o in self.m["cmake_options"] if o["name"] == "STRATA_MMQ_TQ_OVERLAY")
+        self.assertEqual(overlay["kind"], "bool")
+        self.assertEqual(overlay["default"], "ON")
+
+    def test_the_new_model_choices_are_collected(self) -> None:
+        flags = {c["flag"]: c["choices"] for c in self.m["setup_choices"]}
+        self.assertIn("gyro", flags.get("--family", []))
+        self.assertIn("NVFP4-QAD", flags.get("--model", []))
+        self.assertTrue(any("Gyro-" in c for c in flags.get("--model", [])),
+                        "the Gyro-S/Gyro-M models are choices, not a guess")
+
+    def test_the_new_test_targets_are_listed(self) -> None:
+        for target in ("gdn_chunk_parity", "tq_cpu_parity", "pf_wmma_parity", "pool_plan_test"):
+            self.assertIn(target, self.m["targets"], f"{target} is a target of this release")
+
+    def test_the_shipped_manifest_matches_the_clone_it_came_from(self) -> None:
+        """config/build_options.json is the offline fallback, so it must not be stale."""
+        import json
+        data = json.loads(self.MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(data["version"], self.m["version"],
+                         "the manifest on disk is for the clone in tmp/")
+        self.assertEqual({o["name"] for o in data["cmake_options"]},
+                         {o["name"] for o in self.m["cmake_options"]})
+        self.assertEqual(data["source"], str(self.CLONE), "the manifest says where it came from")
+
+    def test_the_change_list_is_written_to_the_file_not_only_printed(self) -> None:
+        import subprocess
+        tmp = Path(tempfile.mkdtemp())
+        out = tmp / "manifest.json"
+        prev = tmp / "previous.json"
+        prev.write_text(__import__("json").dumps({"version": "0.1.45", "cmake_options": [],
+                                                  "setup_choices": []}), encoding="utf-8")
+        try:
+            done = subprocess.run([sys.executable, str(ROOT / "tools" / "extract_build_options.py"),
+                                   str(self.CLONE), "--out", str(out), "--diff", str(prev)],
+                                  capture_output=True, text=True, timeout=60, check=False)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            written = __import__("json").loads(out.read_text(encoding="utf-8"))
+            self.assertIn("STRATA_MMQ_TQ_OVERLAY", written["changes"]["added_options"],
+                          "the diff is in the file the Build tab reads, not just in stdout")
+            self.assertEqual(written["changes"]["removed_options"], [], "nothing was dropped")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

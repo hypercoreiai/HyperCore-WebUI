@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from turn_tail_measure import (
+    SELF_KEY,
+    auth_key,
     covered,
     request,
     start_mock_base,
@@ -155,17 +157,29 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(covered("anything", []), [])
 
 
+class SelfKeyTests(unittest.TestCase):
+    """Which key the harness uses. A mock server started without one inherits the key in
+    the machine's run config, so --self has to name its own."""
+
+    def test_a_self_run_names_a_key_and_a_live_run_keeps_the_one_given(self) -> None:
+        self.assertEqual(auth_key("", True), SELF_KEY)
+        self.assertEqual(auth_key("0000", True), "0000")
+        self.assertEqual(auth_key("", False), "")
+        self.assertEqual(auth_key("secret", False), "secret")
+
+
 class WiringTests(unittest.TestCase):
     """Two mock-engine servers, one with the check on. Without a GPU this is the only
     thing the harness can prove: that the check fires on the test server, never on the
     control, and that the turn it extends really gets longer."""
 
     def test_the_check_runs_on_the_test_server_and_not_on_the_control(self) -> None:
-        base = start_mock_base(8170, "")
-        tail = start_tail_server("http://127.0.0.1:8170", 8171, "", ["--turn-tail-checks", "2"], mock=True)
+        base = start_mock_base(8170, SELF_KEY)
+        tail = start_tail_server("http://127.0.0.1:8170", 8171, SELF_KEY,
+                                ["--turn-tail-checks", "2"], mock=True)
         try:
-            off = request("http://127.0.0.1:8170", "Do three parts of a task.", "", 200, "hypercore")
-            on = request("http://127.0.0.1:8171", "Do three parts of a task.", "", 200, "hypercore")
+            off = request("http://127.0.0.1:8170", "Do three parts of a task.", SELF_KEY, 200, "hypercore")
+            on = request("http://127.0.0.1:8171", "Do three parts of a task.", SELF_KEY, 200, "hypercore")
         finally:
             for proc in (tail, base):
                 proc.terminate()
@@ -179,6 +193,22 @@ class WiringTests(unittest.TestCase):
         self.assertEqual(off["checks"], 0)
         self.assertGreaterEqual(on["checks"], 1)
         self.assertGreater(on["chars"], off["chars"])
+
+    def test_the_mock_pair_answers_only_to_the_key_it_was_started_with(self) -> None:
+        """The 401 this harness used to get is the point: the gate is the real one."""
+        base = start_mock_base(8172, SELF_KEY)
+        try:
+            without = request("http://127.0.0.1:8172", "a prompt", "", 64, "hypercore")
+            with_key = request("http://127.0.0.1:8172", "a prompt", SELF_KEY, 64, "hypercore")
+        finally:
+            base.terminate()
+            try:
+                base.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                base.kill()
+        self.assertIn("error", without)
+        self.assertIn("401", without["error"])
+        self.assertNotIn("error", with_key)
 
 
 if __name__ == "__main__":

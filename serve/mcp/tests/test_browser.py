@@ -11,6 +11,9 @@ HYPERCORE_TEST_LIVE=0 or no engine can be imported.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -230,6 +233,33 @@ class Browser(unittest.TestCase):
         r = self.srv.call("does_not_exist", {"url": "https://example.com/"})
         self.assertFalse(r.ok)
         self.assertIn("unknown tool", r.text)
+
+    @case(SERVER, "stdio", "a call still answers when stdin closes before the call finishes")
+    def test_browser__stdio_drains_in_flight_calls(self):
+        """tools/call runs on its own thread; closing stdin must not drop its reply."""
+        env = dict(os.environ)
+        env.update(stub_env(self.shots))
+        env["STUB_DELAY_MS"] = "400"
+        proc = subprocess.Popen([sys.executable, entry("browser_mcp.py")],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=env)
+        try:
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                         "params": {}}) + "\n")
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                         "params": {"name": "fetch",
+                                                    "arguments": {"url": "https://example.com/"}}}) + "\n")
+            proc.stdin.close()   # the client is done; the call is still running
+            out = proc.stdout.read()
+            proc.wait(timeout=30)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        replies = [json.loads(line) for line in out.splitlines() if line.strip()]
+        ids = {r.get("id") for r in replies}
+        self.assertIn(2, ids, f"the fetch reply was dropped when stdin closed: {out[:200]!r}")
+        body = next(r for r in replies if r.get("id") == 2)
+        self.assertIn("Example Domain", body["result"]["content"][0]["text"])
 
     @case(SERVER, "status", "the live engine opens a page, reads it, and reports itself")
     def test_browser__live_engine(self):

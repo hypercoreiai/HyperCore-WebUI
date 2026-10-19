@@ -1,10 +1,10 @@
 import asyncio
 import time
 
-from webscrape.config import Settings
 from webscrape import service
+from webscrape.config import Settings
 
-from conftest import send_bytes, send_status, jpeg_bytes, png_bytes
+from conftest import jpeg_bytes, png_bytes, send_bytes, send_status
 
 
 def test_download_page_media_max_items(settings: Settings, http_server):

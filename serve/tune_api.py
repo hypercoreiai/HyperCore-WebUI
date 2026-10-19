@@ -333,7 +333,7 @@ def priors() -> list[dict[str, Any]]:
     try:
         if str(TUNE_DIR) not in sys.path:
             sys.path.insert(0, str(TUNE_DIR))
-        from hardware import differences, detect, hardware_from
+        from hardware import detect, differences, hardware_from
         here = detect()
     except Exception:                      # a box with no GPU to probe still gets the list
         here, differences, detect = None, None, None

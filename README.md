@@ -373,8 +373,11 @@ POST /config/strata-hook/stop
 ```
 
 With no `path` the hook looks for `strata/` next to this project, or `HYPERCORE_STRATA_SRC` /
-`STRATA_SRC`. It refuses a checkout inside `tmp/`, because that folder is deleted when a
-build finishes and a model download has to survive. The output goes to `logs/strata-hook.log`;
+`STRATA_SRC`, the cwd of the run config in use, and those names beside the project and two
+levels above it. A checkout you keep wins over the clone `tmp/` keeps. When that clone is
+all there is, the hook runs it and pins `--data-dir` outside `tmp/` (`HYPERCORE_STRATA_DATA`
+overrides the folder) so a 100 GB download does not go with the clone; it refuses to start
+while the Build tab is compiling that same clone. The output goes to `logs/strata-hook.log`;
 the request returns as soon as the process is spawned, so a ten-minute download never
 blocks the server.
 

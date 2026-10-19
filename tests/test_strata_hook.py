@@ -23,8 +23,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from serve import strata_hook
-from serve.strata_hook import StrataHook, build_command, find_checkout
+from serve import quant_store, strata_hook
+from serve.strata_hook import (
+    StrataHook,
+    accepted_flags,
+    build_command,
+    find_checkout,
+    strip_unaccepted,
+)
 
 #: A stand-in for upstream setup.py: prints a few lines, then exits with the code the
 #: test wants. Long enough that a "sleep" variant can be cancelled mid-run.
@@ -112,15 +118,17 @@ class LocateTests(unittest.TestCase):
         self.assertIsNone(found)
         self.assertIn("no setup.py", note)
 
-    def test_tmp_is_scratch_and_is_refused(self) -> None:
-        """tmp/ is deleted when a build finishes, so a model download must not live there."""
+    def test_an_explicit_clone_in_tmp_is_taken(self) -> None:
+        """A build no longer deletes its clone, so a path the user names inside tmp/ is
+        a checkout like any other - the packs it downloads are pinned outside tmp/.
+        See ScratchRunTests for the pin."""
         scratch = ROOT / "tmp" / "strata-test"
         scratch.mkdir(parents=True, exist_ok=True)
         (scratch / "setup.py").write_text("print('x')", encoding="utf-8")
         try:
             found, note = find_checkout(str(scratch))
-            self.assertIsNone(found)
-            self.assertIn("tmp/", note)
+            self.assertEqual(found, scratch / "setup.py")
+            self.assertEqual(note, "")
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -176,9 +184,10 @@ class LocateTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_a_run_config_cwd_in_tmp_is_refused(self) -> None:
-        """A build clone is scratch: setup.py there would download into a folder that
-        is deleted when the build finishes."""
+    def test_a_run_config_pointing_at_the_clone_still_finds_a_checkout(self) -> None:
+        """A run config whose cwd is the build clone is not thrown away: the clone is
+        the only Strata on a box that has never been set up by hand, and the hook runs
+        its setup.py with the packs pinned outside tmp/."""
         tmp = Path(tempfile.mkdtemp())
         try:
             saved = self._throwaway_project(tmp)
@@ -188,8 +197,7 @@ class LocateTests(unittest.TestCase):
                 cfg.parent.mkdir(parents=True, exist_ok=True)
                 cfg.write_text(json.dumps({"cwd": str(clone)}), encoding="utf-8")
                 found, note = find_checkout(None, cfg)
-                self.assertIsNone(found)
-                self.assertIn("tmp/", note)
+                self.assertEqual(found, clone / "setup.py", note)
             finally:
                 strata_hook.ROOT, strata_hook.SCRATCH = saved
         finally:
@@ -210,19 +218,233 @@ class LocateTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_the_note_names_the_only_clone_when_there_is_one(self) -> None:
-        """Saying "no checkout" is not enough when the machine has one in tmp/: the
-        page has to say why that one is not used."""
+    def test_the_note_names_every_folder_the_hook_looked_in(self) -> None:
+        """When there is truly no checkout, the page has to say where it looked, so the
+        user can put one in a folder the hook already knows."""
         tmp = Path(tempfile.mkdtemp())
         try:
             saved = self._throwaway_project(tmp)
             try:
-                clone = make_checkout(strata_hook.SCRATCH, "strata-main")
                 found, note = find_checkout()
                 self.assertIsNone(found)
-                self.assertIn(str(clone), note)
+                self.assertIn("no Strata checkout", note)
+                self.assertIn(str(strata_hook.ROOT / "strata"), note)
+                self.assertIn(str(strata_hook.ROOT.parent / "Strata"), note)
             finally:
                 strata_hook.ROOT, strata_hook.SCRATCH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_clone_is_used_when_it_is_the_only_checkout(self) -> None:
+        """The machine this project ships on: the only Strata is the clone tmp/ keeps."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._throwaway_project(tmp)
+            try:
+                clone = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45")
+                found, note = find_checkout()
+                self.assertEqual(found, clone / "setup.py", note)
+            finally:
+                strata_hook.ROOT, strata_hook.SCRATCH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_checkout_the_user_keeps_beats_the_clone(self) -> None:
+        """The clone is the last resort: a folder beside the project wins over one the
+        next build removes."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._throwaway_project(tmp)
+            try:
+                kept = make_checkout(tmp, "Strata")
+                clone = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45")
+                found, note = find_checkout()
+                self.assertEqual(found, kept / "setup.py", note)
+                self.assertNotEqual(found, clone / "setup.py")
+            finally:
+                strata_hook.ROOT, strata_hook.SCRATCH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_checkout_above_a_nested_project_is_found(self) -> None:
+        """~/test_webUI/HyperCore-WebUI driving ~/Strata: the checkout is two levels up,
+        not beside the project, and the search has to reach it."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            checkout = make_checkout(tmp, "Strata")
+            saved = self._throwaway_project(tmp / "test_webUI")
+            try:
+                found, note = find_checkout()
+                self.assertEqual(found, checkout / "setup.py", note)
+            finally:
+                strata_hook.ROOT, strata_hook.SCRATCH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_newest_clone_is_the_one_used(self) -> None:
+        """tmp/ can hold more than one release; the setup runs against the newest."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._throwaway_project(tmp)
+            try:
+                make_checkout(strata_hook.SCRATCH, "strata-v0.1.45")
+                newer = make_checkout(strata_hook.SCRATCH, "strata-v0.2.0-beta")
+                found, note = find_checkout()
+                self.assertEqual(found, newer / "setup.py", note)
+            finally:
+                strata_hook.ROOT, strata_hook.SCRATCH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+#: A setup that reports the data folder it was told to use. The hook pins --data-dir
+#: when it runs a clone out of tmp/, and this is how a test reads back what it was given.
+DATA_STUB = """#!/usr/bin/env python3
+import sys
+print("setup ran from " + __file__)
+flags = [i for i, a in enumerate(sys.argv) if a in ("--data-dir", "--models-dir")]
+print("data dir: " + (sys.argv[flags[0] + 1] if flags else "setup.py's own default"))
+"""
+
+
+#: A release whose setup.py declares fewer flags than the Build tab's boxes offer: the
+#: choices were read from a newer release, and this is the checkout the box actually has.
+OLD_RELEASE_STUB = """#!/usr/bin/env python3
+import argparse
+ap = argparse.ArgumentParser()
+ap.add_argument("--family", choices=["qwen", "orca"])
+ap.add_argument("--vision", choices=["yes", "no"])
+ap.add_argument("--data-dir")
+ap.add_argument("--yes", action="store_true")
+ap.add_argument("--no-start", action="store_true")
+a = ap.parse_args()
+print("parsed: " + ", ".join(sorted(k for k, v in vars(a).items() if v)))
+"""
+
+
+class ScratchRunTests(unittest.TestCase):
+    """A setup started from the clone in tmp/ must not put its packs in tmp/.
+
+    These run a stub setup.py for real, so they check the command the hook builds and
+    what the status card reports, not just the folder search.
+    """
+
+    def _project(self, tmp: Path) -> tuple:
+        """Point the hook at a throwaway project, and clear the environment so a real
+        HYPERCORE_STRATA_SRC on the box cannot make a test pass by accident."""
+        saved = (strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH)
+        project = tmp / "HyperCore-WebUI"
+        project.mkdir(parents=True, exist_ok=True)
+        strata_hook.ROOT = project
+        strata_hook.SCRATCH = project / "tmp"
+        strata_hook.LOG_PATH = project / "logs" / "hook.log"
+        for name in strata_hook.SEARCH_ENV + strata_hook.DATA_ENV:
+            os.environ.pop(name, None)
+        return saved
+
+    def test_a_clone_gets_a_data_dir_outside_tmp(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                setup = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", DATA_STUB)
+                cmd = build_command(setup, ["--model", "IQ2_XS"], strata_hook.durable_data_dir())
+                self.assertEqual(cmd[-6:-2],
+                                 ["--model", "IQ2_XS", "--data-dir", str(tmp / "Strata-data")])
+                self.assertEqual(cmd[-2:], ["--yes", "--no-start"])
+            finally:
+                strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_caller_that_named_its_own_data_dir_is_not_overridden(self) -> None:
+        cmd = build_command(Path("/nowhere/setup.py"), ["--data-dir", "/models/here"],
+                            Path("/elsewhere/Strata-data"))
+        self.assertEqual(cmd.count("--data-dir"), 1)
+        self.assertIn("/models/here", cmd)
+
+    def test_a_run_from_a_clone_reports_where_the_packs_went(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", DATA_STUB)
+                job = StrataHook()
+                job.log_path = tmp / "hook.log"
+                self.assertEqual(job.start()["state"], "running")
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                self.assertTrue(status["scratch"])
+                self.assertEqual(status["data_dir"], str(tmp / "Strata-data"))
+                self.assertIn(f"data dir: {tmp / 'Strata-data'}", job.tail(0)["lines"])
+            finally:
+                strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_kept_checkout_is_left_with_the_default_data_dir(self) -> None:
+        """A checkout the user keeps already has its own data folder beside it; the hook
+        does not second-guess it."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                make_checkout(tmp, "Strata", DATA_STUB)
+                job = StrataHook()
+                job.log_path = tmp / "hook.log"
+                self.assertEqual(job.start()["state"], "running")
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                self.assertFalse(status["scratch"])
+                self.assertEqual(status["data_dir"], "")
+                self.assertNotIn("--data-dir", status["command"])
+            finally:
+                strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_data_dir_inside_tmp_is_not_used(self) -> None:
+        """An override that points back into tmp/ is worse than setup.py's own default:
+        the packs would go with the clone after all."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                os.environ["HYPERCORE_STRATA_DATA"] = str(strata_hook.SCRATCH / "Strata-data")
+                make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", DATA_STUB)
+                job = StrataHook()
+                job.log_path = tmp / "hook.log"
+                self.assertEqual(job.start()["state"], "running")
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                self.assertEqual(status["data_dir"], "")
+                self.assertNotIn("--data-dir", status["command"])
+            finally:
+                os.environ.pop("HYPERCORE_STRATA_DATA", None)
+                strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH = saved
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_clone_is_refused_while_a_build_is_running(self) -> None:
+        """setup.py installs and downloads into the checkout; running it while the Build
+        tab is compiling that same clone would corrupt the build."""
+        from serve import build_api
+        tmp = Path(tempfile.mkdtemp())
+        saved_state = getattr(build_api.JOB, "state", "idle")
+        try:
+            saved = self._project(tmp)
+            try:
+                clone = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", DATA_STUB)
+                build_api.JOB.state = "building"
+                job = StrataHook()
+                job.log_path = tmp / "hook.log"
+                result = job.start()
+                self.assertEqual(result["state"], "idle", result)
+                self.assertIn("build is using", result["error"])
+                self.assertIn(str(clone), result["error"])
+            finally:
+                build_api.JOB.state = saved_state
+                strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH = saved
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -340,6 +562,53 @@ class HookTests(unittest.TestCase):
         self.assertEqual(cmd[1], "/keep/Strata/setup.py")
         self.assertEqual(cmd[2:], ["--family", "qwen", "--yes", "--no-start"])
 
+    def test_a_flag_this_release_never_declared_is_dropped_with_its_value(self) -> None:
+        """The boxes were read from a release that has image generation; the checkout on
+        the box does not. setup.py would have died in argparse before doing anything."""
+        setup = make_checkout(self.tmp, "oldrelease", OLD_RELEASE_STUB) / "setup.py"
+        kept, dropped = strip_unaccepted(setup, ["--family", "qwen", "--images", "no",
+                                                  "--vision", "no"])
+        self.assertEqual(kept, ["--family", "qwen", "--vision", "no"], kept)
+        self.assertEqual(dropped, ["--images", "no"], dropped)
+        self.assertEqual(build_command(setup, ["--images", "no"])[2:],
+                         ["--yes", "--no-start"], "the dropped pair reached the command")
+
+    def test_a_flag_the_release_has_is_sent_as_it_was_asked(self) -> None:
+        setup = ROOT / "tmp" / "strata-v0.1.45" / "setup.py"
+        if not setup.is_file():
+            self.skipTest("the 0.1.45 clone is not on this box")
+        flags = accepted_flags(setup) or set()
+        self.assertIn("--images", flags, "the clone's own setup.py declares --images")
+        kept, dropped = strip_unaccepted(setup, ["--images", "no", "--image-quant", "Q4_K_M"])
+        self.assertEqual((kept, dropped),
+                         (["--images", "no", "--image-quant", "Q4_K_M"], []))
+
+    def test_flag_equals_value_is_dropped_whole(self) -> None:
+        setup = make_checkout(self.tmp, "equals", OLD_RELEASE_STUB) / "setup.py"
+        kept, dropped = strip_unaccepted(setup, ["--images=qwen-image", "--yes"])
+        self.assertEqual(kept, ["--yes"], kept)
+        self.assertEqual(dropped, ["--images=qwen-image"], dropped)
+
+    def test_a_script_whose_parser_cannot_be_read_is_sent_as_is(self) -> None:
+        """A stub, a wrapper, or a release that builds its parser in a helper: nothing is
+        guessed at, so the caller's flags go through untouched."""
+        setup = make_checkout(self.tmp, "noparser", STUB) / "setup.py"
+        self.assertIsNone(accepted_flags(setup))
+        kept, dropped = strip_unaccepted(setup, ["--images", "no"])
+        self.assertEqual((kept, dropped), (["--images", "no"], []))
+
+    def test_a_dropped_flag_is_reported_and_the_run_still_finishes(self) -> None:
+        checkout = make_checkout(self.tmp, "oldrun", OLD_RELEASE_STUB)
+        self.job.start(str(checkout), ["--family", "qwen", "--images", "no"])
+        status = wait_for(self.job)
+        self.assertEqual(status["state"], "done", status)
+        self.assertEqual(status["exit_code"], 0, "argparse still saw a flag it cannot parse")
+        self.assertEqual(status["dropped"], ["--images", "no"], status)
+        lines = self.job.tail(0)["lines"]
+        self.assertFalse(any("unrecognized arguments" in line for line in lines), lines)
+        self.assertTrue(any("does not accept --images" in line for line in lines), lines)
+        self.assertTrue(any(p["kind"] == "warning" for p in status["problems"]), status["problems"])
+
     def test_the_stage_is_read_from_the_scripts_own_step_markers(self) -> None:
         checkout = make_checkout(self.tmp, "progress", PROGRESS_STUB)
         self.job.start(str(checkout))
@@ -397,11 +666,18 @@ class RouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
         self.checkout = make_checkout(self.tmp)
+        #: The shipped run configs carry an API key, and every route that is not /health
+        #: or /metrics is gated by it. The hook is tested against a keyless config so the
+        #: assertions are about the hook, not the gate.
+        (self.tmp / "hook-config.json").write_text(
+            json.dumps({"exe": "engine/strata", "cwd": str(ROOT), "api_key": ""}),
+            encoding="utf-8")
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             self.port = s.getsockname()[1]
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "serve.server", "--ui-only",
+             "--config", str(self.tmp / "hook-config.json"),
              "--host", "127.0.0.1", "--port", str(self.port)],
             cwd=str(ROOT), env=dict(os.environ, HYPERCORE_HOOK_LOG=str(self.tmp / "hook.log")),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -437,6 +713,15 @@ class RouteTests(unittest.TestCase):
                 return r.status, json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b"{}")
+
+    def test_the_status_card_carries_the_clone_fields(self) -> None:
+        """scratch and data_dir are what the page shows when the setup is running in the
+        clone a build keeps: the packs go to data_dir, not into tmp/."""
+        status, body = self.request("/config/strata-hook", "POST", {"path": str(self.checkout)})
+        self.assertEqual(status, 200, body)
+        self.assertFalse(body["scratch"], body)
+        self.assertEqual(body["data_dir"], "", body)
+        self.assertEqual(body["checkout"], str(self.checkout), body)
 
     def test_post_starts_the_hook_and_get_reports_its_log(self) -> None:
         status, body = self.request("/config/strata-hook", "POST", {"path": str(self.checkout), "args": ["0"]})
@@ -497,6 +782,265 @@ class RouteTests(unittest.TestCase):
         errors = [p for p in report["problems"] if p["kind"] == "error"]
         self.assertTrue(errors, report["problems"])
         self.assertIn("no network", errors[0]["text"])
+
+
+#: A setup that behaves the way upstream setup.py does: it writes everything into the
+#: folder it is run from. Binaries into build/, runtime files into data/, the run script
+#: beside itself. For a clone in tmp/ that is the folder the next build deletes, and the
+#: project's config/ and engine/engine_<quant>/ get nothing - which is what the harvest
+#: is for. It declares no flags, so the hook sends the run exactly what the card asked for.
+HARVEST_STUB = """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+here = Path(__file__).resolve().parent
+(here / "build").mkdir(exist_ok=True)
+(here / "build" / "strata").write_text("engine binary")
+(here / "build" / "libstrata_kq.so").write_text("kernels")
+(here / "data").mkdir(exist_ok=True)
+(here / "data" / "expert-profile.bin").write_text("profile")
+print("=== Step 1: checking this PC ===")
+print("  [ok] wrote " + str(here / "build" / "strata"))
+sys.exit(1 if "--fail" in sys.argv else 0)
+"""
+
+#: A setup that writes what upstream writes beside itself: its run config, named for the
+#: quant it chose. When the card's model box names a model rather than a quant, or is left
+#: unset because the release decides the size per model, this file is the only place the
+#: quant the run used is written - and it is what the store has to be keyed by.
+HARVEST_CONFIG_STUB = """#!/usr/bin/env python3
+import json, sys
+from pathlib import Path
+here = Path(__file__).resolve().parent
+(here / "build").mkdir(exist_ok=True)
+(here / "build" / "strata").write_text("engine binary")
+(here / "data").mkdir(exist_ok=True)
+(here / "data" / "expert-profile.bin").write_text("profile")
+cfg = {"model_name": "qwen3.8-flash-next-iq2_xs",
+       "exe": str(here / "build" / "strata"),
+       "args": ["--pack", str(here / "data" / "packs" / "iq2_xs")]}
+(here / "strata-qwen3.8-flash-next-iq2_xs.json").write_text(json.dumps(cfg))
+print("=== Step 7: writing the start script ===")
+print("  [ok] start script: run-iq2_xs.sh")
+sys.exit(1 if "--fail" in sys.argv else 0)
+"""
+
+
+class HarvestTests(unittest.TestCase):
+    """A setup run in the clone in tmp/ has to leave its files in the project.
+
+    setup.py writes into its own folder. When that folder is the clone a build keeps,
+    the binaries, the runtime files and the run script all stay inside tmp/, so
+    HyperCore-WebUI/config/ and HyperCore-WebUI/engine/engine_<quant>/ have nothing in
+    them and the Model version dropdown has nothing to point at. The harvest moves them:
+    binaries into engine/engine_<quant>/, the run config in config/, the runtime files in
+    engine/engine_<quant>/data/, and the store's active pointer moved to that build.
+    """
+
+    def _project(self, tmp: Path) -> tuple:
+        """Point both the hook and the store at a throwaway project."""
+        saved = (strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH, strata_hook.LOGS,
+                 quant_store.ROOT, quant_store.ENGINE_DIR, quant_store.INDEX_PATH,
+                 quant_store.CONFIG_DIR)
+        project = tmp / "HyperCore-WebUI"
+        project.mkdir(parents=True, exist_ok=True)
+        strata_hook.ROOT = project
+        strata_hook.SCRATCH = project / "tmp"
+        strata_hook.LOG_PATH = project / "logs" / "hook.log"
+        strata_hook.LOGS = project / "logs"
+        strata_hook.LOGS.mkdir(parents=True, exist_ok=True)
+        quant_store.ROOT = project
+        quant_store.ENGINE_DIR = project / "engine"
+        quant_store.INDEX_PATH = project / "engine" / "VERSIONS.json"
+        quant_store.CONFIG_DIR = project / "config"
+        for name in strata_hook.SEARCH_ENV + strata_hook.DATA_ENV:
+            os.environ.pop(name, None)
+        return saved
+
+    def _restore(self, saved: tuple) -> None:
+        (strata_hook.ROOT, strata_hook.SCRATCH, strata_hook.LOG_PATH, strata_hook.LOGS,
+         quant_store.ROOT, quant_store.ENGINE_DIR, quant_store.INDEX_PATH,
+         quant_store.CONFIG_DIR) = saved
+
+    def test_a_setup_run_in_the_clone_stores_its_files_in_the_project(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", HARVEST_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), ["--model", "IQ2_XS"])
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                stored = quant_store.store_dir("iq2_xs")
+                self.assertTrue((stored / "strata").is_file(),
+                                "the engine binary has to land in engine/engine_iq2_xs/")
+                self.assertEqual((stored / "strata").read_text(), "engine binary")
+                self.assertTrue((stored / "libstrata_kq.so").is_file(),
+                                "the K-quant kernels travel with the engine")
+                self.assertTrue((quant_store.CONFIG_DIR / "run-iq2_xs.json").is_file(),
+                                "the run config has to be written in config/")
+                self.assertEqual(status["harvest"]["quant"], "iq2_xs", status["harvest"])
+                self.assertEqual(sorted(status["harvest"]["stored"]),
+                                 ["libstrata_kq.so", "strata"], status["harvest"])
+                self.assertIn("stored engine/engine_iq2_xs", "\n".join(job.tail(0)["lines"]),
+                              "the log has to say where the files went")
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_runtime_files_of_a_clone_setup_are_carried_into_the_store(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", HARVEST_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), ["--model", "IQ2_XS"])
+                status = wait_for(job)
+                carried = quant_store.data_dir("iq2_xs") / "expert-profile.bin"
+                self.assertTrue(carried.is_file(), "the clone's data/ has to be carried")
+                self.assertEqual(status["harvest"]["data"], 1, status["harvest"])
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_run_that_named_a_model_not_a_quant_stores_under_the_quant_it_chose(self) -> None:
+        """The card's model box holds a model name for some releases; the store is keyed
+        by the quant, which the run wrote in its own config inside the clone.
+        """
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", HARVEST_CONFIG_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), ["--model", "Qwen3.8-Flash-Next"])
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                self.assertEqual(status["harvest"]["quant"], "iq2_xs", status["harvest"])
+                self.assertTrue((quant_store.store_dir("iq2_xs") / "strata").is_file(),
+                                "the binary has to land in engine/engine_iq2_xs/")
+                self.assertTrue((quant_store.CONFIG_DIR / "run-iq2_xs.json").is_file(),
+                                "the run config has to be written in config/")
+                lines = "\n".join(job.tail(0)["lines"])
+                self.assertIn("stored engine/engine_iq2_xs", lines, lines)
+                self.assertIn("run config the setup wrote", lines,
+                              "the log has to say where the quant came from")
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_run_with_the_model_box_left_unset_stores_under_the_quant_it_chose(self) -> None:
+        """A box the release decides per model is left unset, so the command names no
+        quant. The run still chose one, and its config in the clone names it.
+        """
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", HARVEST_CONFIG_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), [])
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                self.assertEqual(status["harvest"]["quant"], "iq2_xs", status["harvest"])
+                self.assertTrue((quant_store.store_dir("iq2_xs") / "strata").is_file())
+                self.assertTrue((quant_store.CONFIG_DIR / "run-iq2_xs.json").is_file())
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_setup_run_that_names_no_quant_stores_nothing_and_says_so(self) -> None:
+        """Nothing keys the store here, so the run is reported rather than guessed at."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", HARVEST_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), [])
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                self.assertIsNone(status["harvest"]["quant"], status["harvest"])
+                self.assertFalse(quant_store.ENGINE_DIR.exists(),
+                                 "a run with no quant named must not create a store folder")
+                self.assertIn("no quant", "\n".join(job.tail(0)["lines"]))
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_kept_checkout_is_left_with_its_own_files(self) -> None:
+        """A checkout the user keeps is theirs: the hook does not move what setup.py wrote."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(tmp, "Strata", HARVEST_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), ["--model", "IQ2_XS"])
+                status = wait_for(job)
+                self.assertEqual(status["state"], "done", status)
+                self.assertFalse(status["scratch"])
+                self.assertEqual(status["harvest"], {}, "a run outside tmp/ is not harvested")
+                self.assertTrue((checkout / "build" / "strata").is_file())
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_failed_setup_run_stores_nothing(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", HARVEST_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), ["--model", "IQ2_XS", "--fail"])
+                status = wait_for(job)
+                self.assertEqual(status["state"], "failed", status)
+                self.assertEqual(status["harvest"], {})
+                self.assertFalse(quant_store.ENGINE_DIR.exists())
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_setup_choices_are_written_to_the_config_the_harvest_writes(self) -> None:
+        """The boxes on the card have to reach the run config, not just the command line."""
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            saved = self._project(tmp)
+            try:
+                checkout = make_checkout(strata_hook.SCRATCH, "strata-v0.1.45", HARVEST_STUB)
+                job = StrataHook()
+                job.log_path = strata_hook.LOG_PATH
+                job.start(str(checkout), ["--model", "IQ2_XS", "--context", "262144"])
+                status = wait_for(job)
+                cfg = json.loads((quant_store.CONFIG_DIR / "run-iq2_xs.json")
+                                 .read_text(encoding="utf-8"))
+                self.assertIn("--max-context 262144", status["harvest"]["changes"],
+                              status["harvest"])
+                # args is the flat flag/value list the engine is run with, not a mapping.
+                args = cfg["args"]
+                self.assertIsInstance(args, list, cfg)
+                self.assertIn("--max-context", args, cfg)
+                self.assertEqual(args[args.index("--max-context") + 1], "262144", cfg)
+            finally:
+                self._restore(saved)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

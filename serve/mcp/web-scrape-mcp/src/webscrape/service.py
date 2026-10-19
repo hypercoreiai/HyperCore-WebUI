@@ -10,13 +10,17 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from webscrape.config import Settings
 from webscrape.errors import ACCESS_DENIED, INVALID_URL, ScrapeError, error_dict
 from webscrape.extract import extract_media, hostname_stamp
 from webscrape.httputil import choose_filename, download_to_path, fetch_text
-from webscrape.media import extension_for, ffprobe_info, image_dimensions, mime_from_header_or_file
+from webscrape.media import (
+    extension_for,
+    ffprobe_info,
+    image_dimensions,
+    mime_from_header_or_file,
+)
 from webscrape.sandbox import (
     ensure_allowed_dir,
     resolve_in_allowed,

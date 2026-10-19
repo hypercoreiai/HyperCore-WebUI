@@ -4,9 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
-
-from webscrape.config import Settings
 from webscrape import service
+from webscrape.config import Settings
 
 from conftest import send_bytes
 

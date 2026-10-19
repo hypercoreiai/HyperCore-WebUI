@@ -56,20 +56,34 @@ except ImportError:  # Older Optuna needed scipy; Optuna 5 lazy-imports torch in
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from engine_runner import Metrics, build_prompt, run_config
 from hardware import Hardware, fingerprint, hardware_from
-from prompt_transfer import (TRANSFER_COLUMNS, balance_score, best_per_resource, cross_check,
-                            estimated_transfer, frontier, knee, off_card_share,
-                            stable_machine_rate)
-from history import (distributions_for, find_history, history_path, machine_rates,
-                     machine_read_stats, machine_rates_from_logs, other_objective_history,
-                     usable_trials)
+from history import (
+    distributions_for,
+    find_history,
+    history_path,
+    machine_rates,
+    machine_read_stats,
+    other_objective_history,
+    usable_trials,
+)
 from history import load as load_history
 from history import save as save_history
+from prompt_transfer import (
+    TRANSFER_COLUMNS,
+    balance_score,
+    best_per_resource,
+    cross_check,
+    estimated_transfer,
+    frontier,
+    knee,
+    off_card_share,
+    stable_machine_rate,
+)
 from run_config import write_deliverables as write_run_pair
 from search_space import (
+    DEFAULT_CONFIG,
     LAYERS,
     ROW_COLUMNS,
     Config,
-    DEFAULT_CONFIG,
     ModelPaths,
     Param,
     build_space,
@@ -456,7 +470,7 @@ class Sweeper:
 
     def layers(self) -> Sequence[str]:
         wanted = self.args.layers or LAYERS
-        return [l for l in wanted if l in LAYERS]
+        return [layer for layer in wanted if layer in LAYERS]
 
     def _warm_study(self, study, params: list[Param]) -> int:
         """Hand the study the configurations already measured on this machine.

@@ -1,7 +1,7 @@
 # HyperCore-WebUI - Framework Specification v3 (framework closed - approved)
 
 Repo: hypercoreiai/HyperCore-WebUI
-UI source: /home/ai-user0/black_box/serve/ (the HyperCore-CCP web app)
+UI source: /home/ai-user0/HyperCore-WebUI/serve/ (the HyperCore-CCP web app)
 Engine: the stock Strata engine, Niko1221/Strata, built or downloaded by this project
 Brand: HyperCore - Powered by Strata
 
@@ -71,7 +71,7 @@ HyperCore-WebUI/
     tune_api.py                # NEW: subprocess wrapper + status endpoint
     build_api.py               # NEW: version check, clone, build, transfer
 
-  optuna_tune/                # the tuner, ported from black_box/optuna_tune
+  optuna_tune/                # the tuner, ported from HyperCore-WebUI/optuna_tune
     bayesian_tune.py search_space.py engine_runner.py hardware.py
     history.py run_config.py prompt_transfer.py winner_bench.py
     best_prefill.py max_tune.sh stub_engine.py fixtures/
@@ -154,7 +154,7 @@ POST /tune/stop, POST /tune/apply, GET /tune/export.
 
 Priors: `optuna_tune/history/` is keyed to the machine, and a sweep folds its own
 trials into it, so the next one starts from what already worked. `tools/import_tune_history.py`
-brings measured configurations from another install (default `~/black_box/optuna_tune/history`):
+brings measured configurations from another install (default `~/HyperCore-WebUI/optuna_tune/history`):
 DRY rows dropped, duplicates folded to the best score, only the top N kept, written as
 `seed-<slug>_<model>_<objective>_<context>.json` with provenance. Seven such priors are
 committed (best 30 per objective from an i9-14900KF / RTX 4090 box, 228 KB). A record

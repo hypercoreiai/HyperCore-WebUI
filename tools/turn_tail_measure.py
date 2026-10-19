@@ -68,6 +68,24 @@ DEFAULT_PROMPTS: list[dict[str, Any]] = [
 MOCK_SCRIPT = ("Looking at the request.</think>\n\n"
                "Task one is done, but the second part is not yet complete.")
 
+#: The key a --self run uses for the two mock servers it starts. A server started without a
+#: key takes it from the run config it picks up (serve/server.py: `a.api_key or
+#: cfg.get("api_key")`), and a config the Build tab wrote has "0000" in it - so the
+#: harness' own requests would be 401'd on a machine that has built a quant. Naming the key
+#: here is what makes --self self-contained.
+SELF_KEY = "turn-tail-self-test"
+
+
+def auth_key(key: str, self_run: bool) -> str:
+    """The key the servers this script starts and the requests it sends agree on.
+
+    Against a live endpoint the key is whatever that endpoint needs, and an empty one is
+    fine: an unkeyed server is open. Against the mock pair --self starts, an empty --key
+    still has to become a key, or the servers inherit the machine's run config and the
+    comparison never gets past a 401.
+    """
+    return key or (SELF_KEY if self_run else "")
+
 
 def request(endpoint: str, prompt: str, key: str, max_tokens: int, model: str,
             thinking_budget: int = 0) -> dict[str, Any]:
@@ -207,11 +225,12 @@ def main() -> int:
     a = ap.parse_args()
 
     prompts = load_prompts(a.prompts)
+    key = auth_key(a.key, a.self)
     base = "http://127.0.0.1:8122" if a.self else a.base
     procs = []
     if a.self:
-        procs.append(start_mock_base(8122, a.key))
-    tail = start_tail_server(base, a.tail_port, a.key, ["--turn-tail-checks", str(a.checks)],
+        procs.append(start_mock_base(8122, key))
+    tail = start_tail_server(base, a.tail_port, key, ["--turn-tail-checks", str(a.checks)],
                             mock=a.self)
     procs.append(tail)
 
@@ -219,9 +238,9 @@ def main() -> int:
     try:
         for prompt in prompts:
             for run in range(a.runs):
-                off = request(base, prompt["prompt"], a.key, a.max_tokens, a.model, a.thinking_budget)
+                off = request(base, prompt["prompt"], key, a.max_tokens, a.model, a.thinking_budget)
                 on = request(f"http://127.0.0.1:{a.tail_port}", prompt["prompt"],
-                            a.key, a.max_tokens, a.model, a.thinking_budget)
+                            key, a.max_tokens, a.model, a.thinking_budget)
                 rows.append({"name": prompt.get("name", "prompt"), "run": run,
                             "must": prompt.get("must", []),
                             "off": {**off, "covered": covered(off.get("text", ""), prompt.get("must", []))},

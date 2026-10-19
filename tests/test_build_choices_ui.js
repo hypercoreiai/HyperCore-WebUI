@@ -72,7 +72,7 @@ function parseControls(html) {
   // A stand-in for the browser: every control the card rendered, with the value a
   // user would have left in it (the preselected option, or the value attribute).
   const controls = [];
-  for (const [, flag, body] of html.matchAll(/<select data-flag="([^"]+)">([\s\S]*?)<\/select>/g)) {
+  for (const [, flag, body] of html.matchAll(/<select data-flag="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
     const selected = body.match(/<option value="([^"]+)" selected>/);
     controls.push({ dataset: { flag }, value: selected ? selected[1] : "" });
   }
@@ -83,10 +83,14 @@ function parseControls(html) {
   return controls;
 }
 
-function run(setup, tag, error) {
+function run(setup, tag, error, chosen = {}) {
   const dom = stubDom();
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  const doc = { querySelectorAll: () => parseControls(dom["build-choices-groups"].innerHTML) };
+  // chosen is what a user would have set a box to after the card rendered; the value a
+  // box came in with is the preselected option, so an override is the only way to test
+  // what a card that says no actually sends.
+  const doc = { querySelectorAll: () => parseControls(dom["build-choices-groups"].innerHTML)
+    .map((c) => (Object.prototype.hasOwnProperty.call(chosen, c.dataset.flag) ? { ...c, value: chosen[c.dataset.flag] } : c)) };
   const fn = new Function("$", "esc", "document", renderSrc + "\nreturn renderBuildChoices;");
   const render = fn((id) => dom[id], esc, doc);
   render(setup, tag, error);
@@ -124,20 +128,66 @@ for (const flag of ["--family", "--model", "--context", "--kv", "--vision", "--v
   check(html.includes(`data-flag="${flag}"`), `${flag} has no control`);
 }
 check(html.includes('<option value="int8" selected>'), "the default choice is not preselected");
-check(html.includes('<option value="no" selected>'), "the image default is not no");
+// A box whose release declares no default is left unset, so setup.py answers for this
+// machine. Preselecting the off value here would make every build text-only on a box
+// where the user never touched the card.
+check(html.includes('<option value="" selected>not set</option>'), "a box with no release default is not left unset");
+check(!html.includes('<option value="no" selected>'), "the image box is preselected to the off value");
 check(dom["build-choices-rest"].textContent.includes("1 further flag"), "the card does not count what it left out");
 check(dom["build-choices"].hidden === false, "the card stays hidden when there are choices to show");
 
-// The command line reflects the boxes: an explicit default is sent, an unset or off
-// choice is not. The default build must have no image arguments at all.
+// ---- 3b. every dropdown is as wide as the longest entry it can hold ------------
+check(CSS.includes("width: fit-content"), "the setup dropdowns do not auto-size to their content");
+check(CSS.includes("max-width: 100%"), "an auto-sized dropdown can push out of the card");
+check(CSS.includes(".build-choices-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))"),
+      "the setup boxes are not laid out on the left-aligned tracks the Build options card uses");
+check(!/\.build-choices-grid \{[^}]*justify-items: (center|end)/.test(CSS),
+      "a centred grid would put the first box away from the left edge");
+check(!/\.build-choices-grid \{[^}]*auto-fit/.test(CSS),
+      "auto-fit collapses the tracks a group does not fill, so a short group stops sharing the card's columns");
+check(!/\.build-choices-group__title[^}]*grid-column/.test(CSS),
+      "the group title is still a grid item, so it takes a row and a share of every track");
+check(/\.build-choices-group__title \{[^}]*display: block/.test(CSS),
+      "the group title is not a block sitting above the boxes");
+check(/\.build-choices-grid \{[^}]*minmax\(220px, 1fr\)/.test(CSS),
+      "a column is sized by what is written inside it, so the groups stop sharing the same boundaries");
+check(/<div class="build-choices-group"><span class="build-choices-group__title">Model and quant<\/span><div class="build-choices-grid">/.test(html),
+      "the title is rendered inside the grid instead of above it");
+check(CSS.includes("align-items: start"), "the label still stretches the control to the full cell width");
+check((CSS.match(/minmax\(220px, 1fr\)/g) || []).length >= 2,
+      "the setup card and the Build options card no longer share the same track width");
+check(CSS.includes("@supports not (width: fit-content)"), "there is no fallback for a browser without fit-content");
+
+const selectBodies = Array.from(html.matchAll(/<select data-flag="([^"]+)"([^>]*)>([\s\S]*?)<\/select>/g));
+check(selectBodies.length === 10, `the card rendered ${selectBodies.length} dropdowns, expected 10`);
+for (const [, flag, attrs, body] of selectBodies) {
+  const declared = Number((attrs.match(/data-longest="(\d+)"/) || [null, "-1"])[1]);
+  const widest = Array.from(body.matchAll(/<option[^>]*>([^<]*)<\/option>/g))
+    .reduce((m, o) => Math.max(m, o[1].length), 0);
+  check(declared === widest, `${flag} sizes for ${declared} characters but its longest entry is ${widest}`);
+  check(attrs.includes(`--choice-chars:${declared}`), `${flag} does not pass its width hint to the stylesheet`);
+}
+// The widest box is the one holding the longest entry, not a fixed cell.
+const widestEntry = selectBodies.reduce((m, [, flag, attrs]) => Math.max(m, Number((attrs.match(/data-longest="(\d+)"/) || [0, 0])[1])), 0);
+check(widestEntry === 10, `the longest entry in the card is ${widestEntry} characters, expected 10 (--images qwen-image)`);
+
+// The command line reflects the boxes: a chosen value is sent, an unset one is not.
+// An off value is sent too - in 0.2.0 vision is on by default wherever the model can
+// read pictures, so a box that says no and is not spoken is an on build.
 const command = dom["build-choices-command"].textContent;
 check(command.startsWith("python setup.py"), "the command does not start with the setup script");
 check(command.includes("--kv int8"), "the preselected default is not in the command");
 check(!command.includes("--family"), "an unset box is in the command anyway");
 check(command.includes("--context 32768"), "a numeric field with a value is not in the command");
-check(!command.includes("--vision"), "the no-vision default is sent to setup.py");
-check(!command.includes("--images"), "the no-image default is sent to setup.py");
+check(!command.includes("--vision"), "a box left unset is in the command anyway");
+check(!command.includes("--images"), "a box left unset is in the command anyway");
 check(!command.includes("--image-quant"), "an unset image argument is sent anyway");
+
+// A box the user set to no has to be spoken for: the card says text-only, so a command
+// that leaves it out builds an on build on a card that says off.
+const offCommand = run(SETUP, "v0.1.45", "", { "--vision": "no", "--images": "no" })["build-choices-command"].textContent;
+check(offCommand.includes("--vision no"), "the no-vision box is not sent, so the release turns vision on");
+check(offCommand.includes("--images no"), "the no-image box is not sent, so the release turns images on");
 check(!command.includes("--image-backend"), "an unset image backend is sent anyway");
 check(!command.includes("--image-native"), "an unset image native flag is sent anyway");
 check(!command.includes("--image-gpu-policy"), "an unset image GPU policy is sent anyway");
@@ -148,8 +198,10 @@ check(APP.includes("const HOOK_FLAGS = [\"--yes\", \"--no-start\"]"), "app.js do
 check(command.includes("--yes") && command.includes("--no-start"), "the preview command omits the non-interactive flags");
 check(command.trim().endsWith("--no-start"), "the hook flags are not appended after the choices");
 check(HOOK.includes('NON_INTERACTIVE = ("--yes", "--no-start")'), "serve/strata_hook.py adds no non-interactive flags");
-check(HOOK.includes("def build_command(setup: Path, args: list[str] | None) -> list[str]:"), "no command builder in the hook");
-check(HOOK.includes("command = build_command(setup, args)"), "start() does not use the command builder");
+check(HOOK.includes("def build_command(setup: Path, args: list[str] | None,\n                  data_dir: Path | None = None) -> list[str]:"), "no command builder in the hook");
+check(HOOK.includes("command = build_command(setup, args, data_dir)"), "start() does not use the command builder");
+check(HOOK.includes('if data_dir is not None and not names_data_dir'), "a setup run from the clone a build keeps does not pin its data folder");
+check(APP.includes("model files go to ${b.data_dir}"), "the Build tab does not say where the packs of a clone setup go");
 check(HOOK.includes("stdin=subprocess.DEVNULL"), "the hook leaves stdin open, so a prompt hangs the build");
 check(HOOK.includes("if flag not in given"), "a flag the caller sent would be added twice");
 check(HTML.includes("runs without questions"), "the card does not say the setup answers its own questions");

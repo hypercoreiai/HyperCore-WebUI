@@ -21,6 +21,7 @@ import sys
 
 import regex
 
+
 # ------------------------------------------------------------------ byte <-> unicode (GPT-2 byte-level BPE)
 def bytes_to_unicode() -> dict[int, str]:
     """The GPT-2 byte encoder: 256 bytes -> 256 printable characters, reversibly.

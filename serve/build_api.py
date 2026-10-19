@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from serve import quant_store
+from serve import quant_store, strata_hook
 from serve.quant_store import normalise_quant
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +59,25 @@ def normalise_or_none(quant: Any) -> str | None:
         return normalise_quant(quant) if quant else None
     except ValueError:
         return None
+
+
+def quant_from_choices(choices: Any, clone: Path | None = None) -> str | None:
+    """The quant the Setup choices name, when the quant box was left empty.
+
+    The card's model box holds a quant name (Q2_0, IQ2_XS). A build started from those
+    boxes is for that model, so it is stored in engine/engine_<quant>/ and gets its own
+    config/run-<quant>.json instead of overwriting the default engine - the same model
+    "Run setup with these" would set up. None when no model was named.
+
+    When the box names a model rather than a quant, the run config already in `clone` is
+    the fallback: that is the quant a previous setup run on this clone chose, and a build
+    of that clone is the same model, so it belongs in engine/engine_<quant>/ too.
+    """
+    flags = quant_store.choice_map(choices) if isinstance(choices, (list, tuple)) else (choices or {})
+    key = normalise_or_none(flags.get("--model"))
+    if key is None and clone is not None:
+        key = quant_store.quant_from_checkout(clone)
+    return key
 
 
 def _now() -> str:
@@ -190,7 +210,7 @@ def device_label(device: dict[str, Any]) -> str:
 
 
 #: Upstream's CMakeLists.txt refuses some combinations with a FATAL_ERROR before a
-#: single file is compiled. The guards in the v0.1.45 tree: :97 PREFILL_MMQ needs HIP,
+#: single file is compiled. The guards in the clone being built: :97 PREFILL_MMQ needs HIP,
 #: :1413 PREFILL_MMQ needs NATIVE_EXPERTS (it is compiled from the GGML sources native
 #: experts pull in), :1416 ORCA_Q4KS_MMQ the same, :1612 the MMQ pointer table is built
 #: only in the CUDA branch, and :17, :67, :101 say the GPU backends exclude one another.
@@ -314,7 +334,6 @@ def installed_version() -> dict[str, Any]:
     exe = ENGINE_DIR / EXE
     if out["version"] is None and exe.is_file():
         try:
-            import re
             m = re.search(rb"engine=(\d+\.\d+\.\d+(?:\.\d+)?)\n", exe.read_bytes())
             out["version"] = m.group(1).decode() if m else None
         except OSError:
@@ -348,6 +367,176 @@ def latest_release() -> dict[str, Any]:
     return {"repo": REPO, "releases": releases, "checked_at": _now()}
 
 
+def version_tuple(value: Any) -> tuple[int, ...] | None:
+    """A version as numbers: '0.1.45.3' -> (0, 1, 45, 3), 'v0.2.0-beta' -> (0, 2, 0).
+
+    A trailing label ('-beta') is a pre-release marker, not a version part, so it is
+    dropped. Anything without a leading number is not a version and returns None.
+    """
+    parts: list[int] = []
+    for piece in str(value or "").strip().lstrip("vV").split("."):
+        match = re.match(r"\d+", piece)
+        if not match:
+            break
+        parts.append(int(match.group()))
+    return tuple(parts) if parts else None
+
+
+def is_newer(newer: Any, older: Any) -> bool:
+    """Whether one Strata version is genuinely ahead of another.
+
+    0.1.45.3 is a patch of 0.1.45, so a string compare ("0.1.45.3" != "0.1.45") would
+    tell an engine that is already ahead that it needs an update. When either side is
+    not a parseable version there is nothing to compare, so the old "different" rule
+    still applies rather than guessing.
+    """
+    left, right = version_tuple(newer), version_tuple(older)
+    if left is None or right is None:
+        return str(newer) != str(older)
+    return left > right
+
+
+#: A folder in tmp/ is named for the tag it was cloned at (tmp/strata-v0.1.45), but the
+#: release it holds is the one its own CMakeLists.txt declares: on this machine
+#: tmp/strata-v0.2.0-beta declares project(strata VERSION 0.1.45.3). Both are reported, so
+#: the card can name the tree the choices came from rather than the folder it happens to
+#: be sitting in.
+CLONE_PREFIX = "strata-"
+CLONE_TAG_RE = re.compile(r"^strata-(.+)$", re.IGNORECASE)
+PROJECT_VERSION_RE = re.compile(r"project\(\s*(\w+)\s+VERSION\s+([0-9.]+)", re.IGNORECASE)
+
+
+def shown_path(path: Path) -> str:
+    """A path as the page shows it: relative to the project when it is inside it."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _checkout_record(path: Path, source: str) -> dict[str, Any]:
+    """One release entry, read from the two files the setup choices come from.
+
+    Returns {} for a folder that is not a checkout - a manifest folder, a data folder,
+    or scratch - so the caller skips it. The version is what the checkout's own
+    CMakeLists.txt declares, never the folder name; the folder name only gives the tag.
+    """
+    cmake, setup = path / "CMakeLists.txt", path / "setup.py"
+    if not cmake.is_file() and not setup.is_file():
+        return {}
+    version: str | None = None
+    if cmake.is_file():
+        try:
+            match = PROJECT_VERSION_RE.search(cmake.read_text(encoding="utf-8", errors="replace"))
+            version = match.group(2) if match else None
+        except OSError:
+            version = None      # unreadable: reported as a checkout with no version
+    tag = CLONE_TAG_RE.search(path.name)
+    try:
+        modified = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
+    except OSError:
+        modified = ""
+    return {
+        "tag": tag.group(1) if tag else path.name,
+        "version": version,
+        "path": str(path),
+        "folder": shown_path(path),
+        "source": source,
+        "has_setup": setup.is_file(),
+        "has_cmake": cmake.is_file(),
+        "git": (path / ".git").is_dir(),
+        "modified": modified,
+    }
+
+
+def tmp_releases() -> list[dict[str, Any]]:
+    """The checkouts under tmp/, in folder-name order."""
+    if not TMP_DIR.is_dir():
+        return []
+    try:
+        entries = sorted((p for p in TMP_DIR.iterdir() if p.is_dir()), key=lambda p: p.name)
+    except OSError:
+        return []
+    return [r for r in (_checkout_record(p, "tmp") for p in entries) if r]
+
+
+def searched_releases(run_config: str | Path | None = None) -> list[dict[str, Any]]:
+    """The checkouts outside tmp/, in the order serve/strata_hook.py would find them.
+
+    A Strata the user keeps elsewhere is a release a setup run can be started from, so
+    the scan has to offer it: the hook finds it through the environment, the folder a run
+    config starts the engine from, or the folders beside this project. A folder that is
+    not a checkout is skipped, and a path already counted under tmp/ is not counted twice.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in strata_hook.search_candidates(run_config):
+        try:
+            key = str(path.resolve())
+        except OSError:
+            continue            # a candidate that cannot be resolved is not a checkout
+        if key in seen:
+            continue
+        record = _checkout_record(path, "checkout")
+        if not record:
+            continue
+        seen.add(key)
+        out.append(record)
+    return out
+
+
+def local_releases() -> list[dict[str, Any]]:
+    """The Strata checkouts already on this machine, newest first.
+
+    A build no longer deletes its clone (loop 41: the clone's data/ is what a run config
+    points at), so a machine that has built 0.1.45 and 0.2.0-beta has both trees under
+    tmp/. The Build tab's dropdown was filled only from GitHub's listing, so the release
+    the setup choices were read from and the release a build would actually use could be
+    two different trees, and there was no way to pick between them. This is the scan that
+    makes the local ones selectable.
+
+    A checkout the user keeps outside tmp/ is included too, because that is the tree the
+    hook would run setup.py from (see searched_releases). tmp/ entries come first, so a
+    tree that is both is reported as the clone a build would use.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in tmp_releases() + searched_releases():
+        try:
+            key = str(Path(record["path"]).resolve())
+        except OSError:
+            key = record["path"]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(record)
+    return sorted(out, key=lambda r: (version_tuple(r["version"]) or (0,), str(r["tag"])), reverse=True)
+
+
+def local_clone_for(tag: Any) -> Path | None:
+    """The checkout in tmp/ a tag names, or None when this machine has no such tree.
+
+    The tag is the folder name as local_releases reports it, with or without the leading
+    v. A folder with neither of the two files is not a checkout and is not returned, so a
+    build asked for it still goes to GitHub rather than building from a tree it cannot
+    describe.
+    """
+    want = str(tag or "").strip().lstrip("vV").lower()
+    if not want or not TMP_DIR.is_dir():
+        return None
+    try:
+        entries = sorted((p for p in TMP_DIR.iterdir() if p.is_dir()), key=lambda p: p.name)
+    except OSError:
+        return None
+    for path in entries:
+        name = path.name.lower()
+        if not name.startswith(CLONE_PREFIX) or name[len(CLONE_PREFIX):].lstrip("vV") != want:
+            continue
+        if (path / "CMakeLists.txt").is_file() or (path / "setup.py").is_file():
+            return path
+    return None
+
+
 def build_status() -> dict[str, Any]:
     """Everything the Build tab needs in one call.
 
@@ -368,12 +557,19 @@ def build_status() -> dict[str, Any]:
     # device defaults options_for() applies are applied here too: what the tab shows has to
     # be what cmake is given, otherwise a build on a CUDA box configures a CPU-only tree.
     options = with_device_defaults(options) if options else options
+    if options and not options.get("from"):
+        # The manifest names the folder it was extracted from but not that it is a local
+        # file, so the card needs the word for it.
+        options = {**options, "from": "the manifest the last build wrote"}
     return {
         "installed": installed,
         "latest": listing,
         "newest": newest,
-        "update_available": bool(newest and have and newest.get("version") != have),
+        "update_available": bool(newest and have and is_newer(newest.get("version"), have)),
         "options": options,
+        # The checkouts this machine already has, so the tab can offer them as build
+        # sources and not only the releases GitHub publishes.
+        "local": local_releases(),
         "setup": setup_choices(options or {}),
         "job": JOB.status(),
     }
@@ -411,9 +607,18 @@ def options_for(tag: str) -> dict[str, Any]:
     """How a release can be built and configured, read from the release's own files.
 
     Nothing is hard-coded against a Strata version: the options come from the
-    CMakeLists.txt and setup.py of the tag asked for. The local manifest (written by
-    the last build) is used when it is for that same version, so a machine that is
-    offline still gets the list.
+    CMakeLists.txt and setup.py of the tag asked for. Three sources, in the order the tab
+    should trust them:
+
+      1. a checkout this machine already has in tmp/ for that tag - it is the tree a
+         build of that tag would actually use, so it is the one the choices must come
+         from when the user picked it in the dropdown;
+      2. the manifest the last build wrote, when it was written from that same release;
+      3. GitHub, without cloning.
+
+    `from` names which of the three the answer came from, so the card can say it: a card
+    that lists one release's flags under another release's name is what this function used
+    to produce, and the second source is exactly that case.
     """
     tag = tag or "main"
     if tag in _options_cache:
@@ -424,14 +629,31 @@ def options_for(tag: str) -> dict[str, Any]:
             local = json.loads(MANIFEST.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             local = None
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    from extract_build_options import diff, manifest  # a local tool, not a package
+
+    clone = local_clone_for(tag)
+    if clone is not None:
+        try:
+            result = manifest(clone)
+        except Exception as exc:  # noqa: BLE001 - a tree we cannot parse is reported, not raised
+            result = {"error": f"the checkout in tmp/{clone.name} could not be read: {exc}",
+                      "tag": tag, "cmake_options": [], "setup_choices": [], "from": "unreadable"}
+        else:
+            result["tag"] = tag
+            result["from"] = f"the checkout in {shown_path(clone)}"
+            if local and local.get("version") != result.get("version"):
+                result["changes"] = diff(local, result)
+        result = with_device_defaults(result)
+        _options_cache[tag] = result
+        return result
+
     if local and (local.get("version") or "") == tag.lstrip("v"):
         result = with_device_defaults({**local, "tag": tag,
                                       "from": "the last build of this release"})
         _options_cache[tag] = result
         return result
-
-    sys.path.insert(0, str(ROOT / "tools"))
-    from extract_build_options import diff, manifest  # a local tool, not a package
 
     clone, error = fetch_release_files(tag)
     if clone is None:
@@ -508,7 +730,15 @@ def setup_choices(options: dict[str, Any]) -> dict[str, Any]:
             groups.setdefault(choice["group"], []).append(choice)
         else:
             hidden += 1
-    return {"groups": groups, "hidden": hidden, "total": len(choices)}
+    # Which release these groups belong to and where it was read from, carried through so
+    # the card can name them: the flags of one release shown under another release's name
+    # is what the card used to do.
+    return {"groups": groups, "hidden": hidden, "total": len(choices),
+            "tag": options.get("tag") or options.get("version"),
+            # What the release declares, which is not always the name it was fetched as:
+            # tmp/strata-v0.2.0-beta declares 0.1.45.3. The card titles itself with this.
+            "version": options.get("version") or options.get("tag"),
+            "from": options.get("from")}
 
 
 def published_digests(release: dict[str, Any]) -> dict[str, str]:
@@ -523,22 +753,121 @@ def published_digests(release: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
-def asset_for(release: dict[str, Any]) -> dict[str, Any] | None:
-    """The release engine archive for this machine.
+#: The archive shapes a release can carry the engine in. 0.1.45 shipped one zip per
+#: OS; 0.2.0 ships a per-toolchain engine bundle as tar.gz beside the app installers
+#: and the updater. The pick is by content, never by a name list we maintain.
+ENGINE_ARCHIVE_SUFFIXES: tuple[str, ...] = (".zip", ".tar.gz", ".tgz")
+#: An archive that is the app, the updater or the terminal - not the engine.
+NOT_ENGINE_ASSETS: tuple[str, ...] = ("update", "updater", "terminal", "installer", "app.", "app-")
+#: The words upstream uses for a GPU backend in an asset name.
+BACKEND_WORDS: dict[str, tuple[str, ...]] = {"cuda": ("cuda",), "hip": ("hip", "rocm"),
+                                            "sycl": ("sycl", "oneapi", "intel")}
 
-    Upstream publishes ready-made engines for Windows (plain, CUDA 12, HIP); on Linux
-    setup.py compiles the engine on the box. When there is no archive for this OS the
-    Build tab says so and offers the source build instead.
-    """
-    names = [a["name"] for a in release.get("assets", [])]
-    want = "strata-windows-x64.zip" if IS_WIN else "strata-linux-x64.zip"
-    for name in names:
-        if name == want:
-            return next(a for a in release["assets"] if a["name"] == name)
-    for name in names:
-        if name.endswith(".zip") and ("windows" if IS_WIN else "linux") in name:
-            return next(a for a in release["assets"] if a["name"] == name)
+
+def is_engine_archive(name: Any) -> bool:
+    """Whether a release asset is an engine archive rather than an app or an update."""
+    lowered = str(name or "").lower()
+    if not lowered.endswith(ENGINE_ARCHIVE_SUFFIXES):
+        return False
+    return not any(word in lowered for word in NOT_ENGINE_ASSETS)
+
+
+def backend_of(name: Any) -> str | None:
+    """The GPU backend an asset name advertises, or None for a plain archive."""
+    lowered = str(name or "").lower()
+    for backend, words in BACKEND_WORDS.items():
+        if any(word in lowered for word in words):
+            return backend
     return None
+
+
+def cuda_major(text: Any) -> str | None:
+    """The CUDA major version in a toolkit path or an asset name: 'cuda-13.4/bin' -> '13'."""
+    match = re.search(r"cuda[-_.]?(\d+)", str(text or "").lower())
+    return match.group(1) if match else None
+
+
+def asset_for(release: dict[str, Any], device: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """The release asset that carries the engine for this machine.
+
+    Upstream changed the shape of a release: 0.1.45 published one zip per OS
+    (strata-linux-x64.zip, strata-windows-x64-cuda12.zip), while 0.2.0 publishes a
+    per-toolchain engine bundle (strata-engine-0.1.46-linux-x86_64-cuda-cuda13.tar.gz)
+    next to the app installers and the updater artifact. Nothing here is keyed to a
+    release number: an asset is a candidate when it is an archive and not an app or an
+    update, and the best one is the archive for this OS whose backend and CUDA major
+    version match the toolchain this box has. When the OS is not covered at all the
+    Build tab says so and offers the source build.
+    """
+    device = device or device_defaults()
+    want_backend = device.get("device") or "none"
+    want_cuda = cuda_major(device.get("toolkit") or "")
+    os_word = "windows" if IS_WIN else "linux"
+
+    def rank(asset: dict[str, Any]) -> tuple[int, int, int, int]:
+        name = str(asset.get("name") or "").lower()
+        on_os = 1 if os_word in name else 0
+        backend = backend_of(name)
+        if backend == want_backend:
+            backend_score = 2
+        elif backend is None:
+            # a toolchain-free archive: usable when the box has no GPU compiler
+            backend_score = 1 if want_backend in ("none", "cpu") else 0
+        else:
+            backend_score = 0
+        cuda = cuda_major(name)
+        tool_score = 2 if want_cuda and cuda == want_cuda else (1 if not want_cuda and cuda is None else 0)
+        bundle = 1 if name.startswith("strata-engine-") else 0
+        return (on_os, backend_score, tool_score, bundle)
+
+    candidates = [a for a in release.get("assets", []) if is_engine_archive(a.get("name"))]
+    if not candidates:
+        return None
+    best = max(candidates, key=rank)
+    if not rank(best)[0]:
+        return None                      # nothing published for this operating system
+    if want_backend in ("none", "cpu") and backend_of(best.get("name")) is not None:
+        return None                      # every archive is for a GPU this box does not have
+    return best
+
+
+def _safe_member(name: Any) -> bool:
+    """Whether an archive member can be written inside the folder it is unpacked into.
+
+    An archive member is attacker-supplied once it is downloaded: a member named
+    `../strata` would write into the repo instead of the engine folder.
+    """
+    text = str(name or "")
+    if not text or text.startswith("/"):
+        return False
+    return all(part != ".." for part in text.replace("\\", "/").split("/"))
+
+
+def unpack_archive(path: Path, dest: Path) -> list[str]:
+    """Unpack a release archive (zip or tar.gz) into `dest` and return the file names.
+
+    Members that would land outside `dest` are refused before anything is written.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    lowered = str(path).lower()
+    if lowered.endswith((".tar.gz", ".tgz")):
+        import tarfile
+        with tarfile.open(path, "r:gz") as archive:
+            members = [m for m in archive.getmembers() if m.isfile()]
+            unsafe = [m.name for m in members if not _safe_member(m.name)]
+            if unsafe:
+                raise ValueError(f"the archive carries members outside its folder: {', '.join(unsafe[:3])}")
+            for member in members:
+                archive.extract(member, dest, filter="data")
+        return [m.name for m in members]
+    import zipfile
+    with zipfile.ZipFile(path) as archive:
+        names = [n for n in archive.namelist() if n and not n.endswith("/")]
+        unsafe = [n for n in names if not _safe_member(n)]
+        if unsafe:
+            raise ValueError(f"the archive carries members outside its folder: {', '.join(unsafe[:3])}")
+        archive.extractall(dest)
+    return names
 
 
 # ---------------------------------------------------------------- the build job
@@ -552,6 +881,7 @@ class BuildJob:
         self.log_path: Path | None = None   # the same lines, on disk, for a tail reader
         self.version: str | None = None
         self.quant: str | None = None     # the quant this build is for, if one was named
+        self.choices: dict[str, str] = {}  # the Setup-choice boxes, as {flag: value}
         self.started: float | None = None
         self.result: dict[str, Any] | None = None
         self.proc: subprocess.Popen | None = None
@@ -608,6 +938,7 @@ class BuildJob:
             "state": self.state,
             "version": self.version,
             "quant": self.quant,
+            "choices": self.choices,
             "elapsed_s": round(time.time() - self.started, 1) if self.started else 0,
             "log": self.log[-400:],
             "result": self.result,
@@ -816,6 +1147,22 @@ class BuildJob:
                 self.log_line(f"no run config for {key}: {cfg_note}")
             else:
                 self.log_line(f"run config: {cfg_note}")
+            # The run config is copied from the nearest config on the box, so the settings
+            # the Setup choices hold are written after the copy: without this a build
+            # started with --context 262144 runs on the template's 131072.
+            written, applied = quant_store.apply_build_choices(key, self.choices)
+            if applied and written is not None:
+                self.log_line(f"setup choices written to config/{written.name}: "
+                              f"{', '.join(applied)}")
+            model_named = str(self.choices.get("--model") or "")
+            if model_named and model_named.lower().replace("-", "_") != key:
+                self.log_line(f"the model box names {model_named}, but this build is stored "
+                              f"for {key}: the quant box decides where the engine goes.")
+            unwritten = [f"{flag} {value}" for flag, value in self.choices.items()
+                         if value and flag not in quant_store.RUN_CHOICE_FIELDS and flag != "--model"]
+            if unwritten:
+                self.log_line("setup choices a run config does not carry (setup.py decides "
+                              f"these): {', '.join(unwritten)}")
             chosen = quant_store.select(key)
             self.log_line(f"active engine: {chosen['note']}"
                          if chosen["active"] else f"could not activate {key}: {chosen['note']}")
@@ -830,12 +1177,32 @@ class BuildJob:
             stored = quant_store.carry_data_dir(None, clone)
             if stored:
                 self.log_line(f"stored engine/data: {len(stored)} runtime file(s)")
+            if self.choices:
+                # The Setup choices have nowhere to go: a build with no quant named is the
+                # default engine, and the run configs that start it belong to their own
+                # models. Saying so is better than letting the boxes look applied.
+                self.log_line("setup choices not written: this build is the default engine "
+                              "and writes no run config of its own. Name a quant, or pick "
+                              "one in the model box, to have them written.")
         return copied, key
 
-    def start(self, tag: str, options: dict[str, Any], quant: str | None = None) -> dict[str, Any]:
+    def start(self, tag: str, options: dict[str, Any], quant: str | None = None,
+             choices: Any = None) -> dict[str, Any]:
         """Start a build. `quant` names the quant this engine is built for, so it is
         stored under engine/versions/<quant> instead of overwriting the engine in engine/.
+
+        `choices` are the Setup-choice boxes of the Build tab, in the flat
+        ["--context", "32768", "--kv", "int8"] form the setup hook gets. They are written
+        into the run config this build writes, so a build started from the card runs with
+        the context, KV cache and port the card holds rather than the ones the shipped
+        template happens to name. When no quant is named but the card names a model, that
+        model's quant is the quant the build is stored under.
         """
+        self.choices = quant_store.choice_map(choices) if isinstance(choices, (list, tuple)) else dict(choices or {})
+        if not str(quant or "").strip():
+            derived = quant_from_choices(self.choices, TMP_DIR / f"strata-{tag}")
+            if derived:
+                quant = derived
         with self.lock:
             if self.state not in ("idle", "done", "failed"):
                 return {"error": "a build is already running"}
@@ -934,6 +1301,7 @@ class BuildJob:
                 "built_at": _now(),
                 "src": hashlib.sha256((clone / "CMakeLists.txt").read_bytes()).hexdigest()[:16],
                 "options": options,
+                "choices": self.choices,
             }
             copied, key = self.transfer_binaries(build_dir, meta, quant, [vision] if vision else [])
 
@@ -956,26 +1324,39 @@ class BuildJob:
             self.log_line(f"error: {exc}")
             self.result = {"error": str(exc)}
 
-    def fetch_prebuilt(self, release: dict[str, Any], quant: str | None = None) -> dict[str, Any]:
-        """Download the ready-made engine for this OS and install it.
+    def fetch_prebuilt(self, release: dict[str, Any], quant: str | None = None,
+                      choices: Any = None) -> dict[str, Any]:
+        """Download the ready-made engine for this machine and install it.
 
         With a quant named it is installed as a model version: unpacked into tmp/,
         then stored in engine/engine_<quant>/ with its own run config, exactly like a
         build from source. Without one it is simply the engine in engine/.
+
+        `choices` are the Setup-choice boxes, and they mean the same thing here as they
+        do for a source build: the quant named by the model box is the quant the engine
+        is installed as, and the settings the boxes hold are written into the run config
+        the install writes.
         """
+        self.choices = (quant_store.choice_map(choices) if isinstance(choices, (list, tuple))
+                        else dict(choices or {}))
+        if not str(quant or "").strip():
+            derived = quant_from_choices(self.choices)
+            if derived:
+                quant = derived
         asset = asset_for(release)
         if not asset:
-            return {"error": "this release has no engine archive for this operating system"}
-        zip_path = TMP_DIR / asset["name"]
-        zip_path.parent.mkdir(parents=True, exist_ok=True)
+            return {"error": "this release has no ready-made engine for this machine "
+                             "(operating system and GPU toolchain); build from source instead"}
+        archive_path = TMP_DIR / asset["name"]
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            urllib.request.urlretrieve(asset["url"], zip_path)
+            urllib.request.urlretrieve(asset["url"], archive_path)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"download failed: {exc}"}
-        digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
         expected = published_digests(release).get(asset["name"])
         if expected and expected != digest:
-            zip_path.unlink(missing_ok=True)
+            archive_path.unlink(missing_ok=True)
             return {"error": f"the downloaded archive does not match the published SHA-256 ({expected[:16]}...)"}
         key = normalise_or_none(quant)
         if quant and key is None:
@@ -984,13 +1365,11 @@ class BuildJob:
         meta = {"source": "prebuilt", "version": release.get("version"), "tag": release.get("tag"),
                "asset": asset["name"], "sha256": digest, "built_at": _now()}
         ENGINE_DIR.mkdir(parents=True, exist_ok=True)
-        import zipfile
         if key:
             unpacked = TMP_DIR / f"prebuilt-{key}"
             unpacked.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(unpacked)
-            zip_path.unlink(missing_ok=True)
+            unpack_archive(archive_path, unpacked)
+            archive_path.unlink(missing_ok=True)
             meta["quant"] = key
             meta["label"] = key
             entry = quant_store.store_binaries(key, [p for p in unpacked.rglob("*") if p.is_file()], meta)
@@ -1002,6 +1381,9 @@ class BuildJob:
                               f"{len(carried)} runtime file(s)")
             self.clean_tmp()
             cfg_path, cfg_note = quant_store.ensure_run_config(key)
+            written, applied = quant_store.apply_build_choices(key, self.choices)
+            if applied and written is not None:
+                self.log_line(f"setup choices written to config/{written.name}: {', '.join(applied)}")
             refreshed = quant_store.refresh_run_configs(key)
             for line in refreshed:
                 self.log_line(f"run configs updated: {line}")
@@ -1013,9 +1395,8 @@ class BuildJob:
                     "run_config_note": cfg_note,
                     "refreshed_configs": refreshed,
                     "active": chosen["active"], "note": chosen["note"]}
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(ENGINE_DIR)
-        zip_path.unlink(missing_ok=True)
+        unpack_archive(archive_path, ENGINE_DIR)
+        archive_path.unlink(missing_ok=True)
         (ENGINE_DIR / "BUILD.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
         refreshed = quant_store.refresh_run_configs(None)
         for line in refreshed:

@@ -18,7 +18,6 @@ sys.path.insert(0, str(ROOT))
 
 from serve import assist  # noqa: E402
 
-
 TOOLS = [
     {
         "name": "status",

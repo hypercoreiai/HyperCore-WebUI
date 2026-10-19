@@ -14,7 +14,12 @@ the prompt progress as if it were generated tokens.
 import threading
 import unittest
 
-from serve.direct_engine import DirectEngine, DirectEngineError, memory_short, missing_paths
+from serve.direct_engine import (
+    DirectEngine,
+    DirectEngineError,
+    memory_short,
+    missing_paths,
+)
 
 STUB = "tests/stub_engine.py"
 

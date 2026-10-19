@@ -12,10 +12,21 @@ Two spellings are easy to guess wrong and are checked by name:
   --cntx, not --max-context;
   --no-benchmark, because there is no --benchmark.
 """
+import importlib.util
 import subprocess
 import unittest
 
 from serve import tune_api
+
+
+def optuna_present() -> bool:
+    """Whether the tuner can be run at all on this box.
+
+    optuna is optional: requirements.txt lists it under "Tune tab (optional)", and the
+    tuner imports it at module level, so a box without it cannot even reach argparse.
+    The checks below run the real CLI, so on such a box they have nothing to check.
+    """
+    return importlib.util.find_spec("optuna") is not None
 
 
 def sample_request() -> dict:
@@ -52,6 +63,9 @@ class TuneCommand(unittest.TestCase):
         return subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
 
     def test_the_whole_command_is_accepted_by_the_tuner(self):
+        if not optuna_present():
+            self.skipTest("optuna is not installed, so the tuner cannot be run: "
+                          "requirements.txt lists it as optional")
         out = self.run_dry(sample_request())
         self.assertNotIn("unrecognized arguments", out.stdout + out.stderr)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)

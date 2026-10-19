@@ -28,6 +28,85 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   a subfolder the clone kept (`data/experimental-speed-projection/`), not the top of the
   data folder with the file name put back on it; two files carrying the same name are not
   resolved by guessing. A path that already exists on this box is left as the user left it.
+- **The repository's own quality gates are in the repository**: `serve/server.py` (6,159 lines)
+  is split into `serve/api_lanes.py`, `serve/config_payload.py`, `serve/engine_args.py`,
+  `serve/engine_errors.py`, `serve/narration.py`, `serve/proc.py`, `serve/tokenizing.py` and
+  `serve/vision.py`, leaving 4,882 lines with the routes unchanged; `pytest.ini` collects
+  `serve/mcp/tests` as well as `tests/` (704 cases, up from 466); `pyproject.toml` and
+  `requirements-dev.txt` declare the tooling and `.github/workflows/ci.yml` gates on ruff,
+  pytest and the 18 node suites; the 20 handlers that swallowed an exception with `pass` are
+  down to 6, each one naming why it swallows; `requirements.txt` gives every entry a lower
+  bound; `tools/build_history.py` reads the home of whoever runs it instead of a hardcoded
+  `/home/ai-user0`; the test fixtures (`frame_fixture.py`, `mcp_fake_server.py`, `flood_stub.py`,
+  `monitor_demo.py`, `chat_golden.json`) are out of the production package; and `data/history/`
+  (chats, topics, notes, index.json, sources.md) is tracked, while the 114 MB raw transcript
+  archive stays machine-local.
+- **A build runs with the settings the Setup choices hold**: `Clone and build from source` sent
+  only the cmake options, so the run config it wrote was a copy of the nearest config on the box
+  - `config/run-example.json` when there is none - and the context, KV cache and port in the
+  boxes above the button were ignored. The card's flags now travel with the request, and
+  `quant_store.apply_build_choices()` writes the ones a run config carries (`--context` ->
+  `--max-context`, `--kv`, `--rope-scaling`, `--rope-scale`, `--vram-reserve-mib`, `--parallel`,
+  `--port`, `--host`, `--api-key`, `--gpu`) into the config the build just wrote, naming the
+  changes in the build log. A flag a run config has no field for (`--vision`, `--image-quant`,
+  the data and mirror paths) is named in the log rather than dropped quietly. The quant is the
+  quant box, or the model the card names when the box is empty, so a build started from the card
+  is stored in `engine/engine_<quant>/` and gets `config/run-<quant>.json` like `Run setup with
+  these` would. `tests/test_build_source_choices.js` and `RunChoiceTests` cover both directions.
+- **A release's engine archive is picked by content, not by a name we maintain**: 0.1.45
+  shipped one zip per OS; 0.2.0 ships a per-toolchain engine bundle
+  (`strata-engine-<ver>-<os>-<arch>-<backend>-<toolchain>.tar.gz`) beside the app installers
+  and the updater artifact. `asset_for()` reads the release's own asset list and takes the
+  archive for this OS whose backend and CUDA major version match the toolchain on the box,
+  refusing an app installer, an updater, or a GPU bundle on a machine with no GPU compiler.
+  `tar.gz` is unpacked as well as `zip`, and an archive member that would land outside the
+  engine folder is refused before anything is written. An update is a newer version rather
+  than a different string: an engine already at 0.1.45.3 is not told it is behind a 0.1.45
+  release.
+- **The Build tab says "no" out loud**: `DEFAULT_OFF_FLAGS` used to drop a flag whose box held
+  an off value, which was harmless while the release defaulted those to off. 0.2.0 turns
+  `--vision` on by default wherever the model can read pictures, so a box left at `no` was
+  silently overridden. `--vision`, `--images` and `--image-native` are now passed with their
+  off value; only `--experimental-speed-projection`, which the release really is off by
+  default, is still left out. `tests/test_build_off_flags.js` runs the card's flag block
+  against a stub DOM and checks both directions.  The manifest the test reads was re-extracted
+  from the 0.2.0 clone with `tools/extract_build_options.py`, so the `--vision` help in the live
+  tree is the release's wording rather than the 0.1.45 one; the two WebUI trees now carry the
+  same manifest (they differ only in the `changes` block, which records the 0.1.45 -> 0.1.45.3
+  option added).
+- **The setup hook sends only flags the setup.py it runs can read**: the choice boxes are
+  read from the release selected in the dropdown, but `serve/strata_hook.py` runs the
+  setup.py of the checkout this machine has. On a box whose Strata is older than the tag,
+  `Run setup with these` stopped at `setup.py: error: unrecognized arguments: --images no`
+  before setup.py did any work. `accepted_flags()` reads that script's own `add_argument`
+  lines (cached by path and mtime; a script with no parser it can read is sent exactly what
+  the caller asked for), and `strip_unaccepted()` drops a flag with its value - `--images no`
+  as a pair, `--flag=value` whole. Nothing is dropped quietly: the hook writes an `[!]` line
+  to its log, the status card shows it as a warning, the response carries `dropped`, and the
+  command line under the boxes is replaced by the one that actually ran.
+- **The Build tab lets you choose which release to build from**: the card was titled
+  "Available releases" and was filled only from GitHub's listing, so a machine that has
+  built 0.1.45 and 0.2.0-beta - both still under tmp/, since a build no longer deletes its
+  clone - could only pick the tags GitHub publishes, and the card could name one release
+  while listing another's flags. The card is now "Build from" with two groups: the
+  checkouts this machine has, newest first, then the published releases. `local_releases()`
+  counts a folder as a release only when it holds `CMakeLists.txt` or `setup.py`, so a
+  manifest folder or the packs folder is not offered, and the version shown is the one the
+  checkout's own `project()` line declares, not the tag its folder is named for
+  (`tmp/strata-v0.2.0-beta` declares 0.1.45.3). `options_for()` reads the flags from that
+  checkout first, then the manifest, then GitHub, and `from` names which of the three the
+  answer came from; the card titles itself with that release's version rather than the
+  engine that happens to be installed, and says which tree the flags were read out of. A
+  build of a tag whose checkout is already on the box reuses that tree, so the release
+  picked in the box is the release that gets built.
+- **Test harness**: a `conftest.py` at the repo root puts the project on `sys.path`, so
+  `pytest tests -q` behaves the same as `python3 -m pytest tests -q`. Without it the bare
+  spelling stopped at collection with `ModuleNotFoundError: No module named 'serve'`;
+  `tests/test_pytest_scope.py` now collects both ways and fails if they differ. The root
+  conftest is only read when the rootdir resolves to this repo, so `pytest.ini` also sets
+  `pythonpath = .`: a bare `pytest` from inside `tests/`, or one started by a wrapper that
+  passes its own root, imports `serve` the same way. `test_pytest_scope.py` runs collection
+  from both directories and fails on either spelling.
 - **A build refreshes every run config, not just its own**: `serve/quant_store.py`
   `refresh_run_configs(quant, clone)` walks `config/` at the end of a build and points each
   config at the engine build stored for the model it names - the shipped
@@ -316,7 +395,9 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   goes to `logs/strata-hook.log`, and streams that log into the page from a byte offset.
   `POST /config/strata-hook`, `GET /config/strata-hook`, `POST /config/strata-hook/stop`
   (`serve/strata_hook.py`, `tests/test_strata_hook.py`, `tests/test_strata_hook_ui.js`).
-  A checkout inside `tmp/` is refused: that folder is deleted when a build finishes.
+  A checkout the user keeps is preferred. The clone `tmp/` keeps is used when it is the
+  only Strata with a `setup.py`, with `--data-dir` pinned outside `tmp/` so the packs do
+  not go with the clone, and refused while a build is running in it.
 - **The build log is tailed, not re-sent**: `GET /build/log?offset=<n>` returns only the
   lines written since that offset, and the same lines are written to
   `logs/build-<tag>.log` as the build runs (`serve/build_api.py`, `tests/test_build_api.py`).
@@ -340,6 +421,18 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   fill in, so everything below the fold was unreachable. `.view--build` and `.view--tune` now
   scroll like the other tabs and take the same centred 1240px column and card spacing as the
   Monitor (`tests/test_build_tab_scroll.js`).
+- **The setup-choice boxes did not line up with the Build options card.** Each group's title was
+  the first cell of the grid, so it took a row and a share of every track: the first box started
+  below the title instead of at the top of the group, and a title wider than the boxes under it
+  widened those columns and offset every box below it. The title is now a block above the boxes
+  and the boxes live in `.build-choices-grid`, which uses `repeat(auto-fill, minmax(220px, 1fr))`
+  rather than `auto-fit`: auto-fit collapses the tracks a short group does not fill, so a two-box
+  group spread its columns across the whole card and landed on different boundaries than the group
+  above it. Each dropdown is sized to the widest entry it holds (`width: fit-content`, with a
+  `--choice-chars` floor set per box by `choiceField` for a browser that lacks it) and capped at
+  its column. Verified with `tests/test_build_choices_ui.js` and the real-browser measurement in
+  `tmp/measure_build_choices_widths.py` (0 boxes off their column, 0 groups with different
+  boundaries, setup tracks equal to the Build options card's).
 - **The Build tab's release dropdown was empty.** `GET /build/status` put the newest
   single release under `latest` while the page read `latest.releases`, so the box never
   filled and the note fell back to "could not reach GitHub". The route now returns the
@@ -386,6 +479,14 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   box - a bare `pytest` from the repo root stopped with a collection error before it reached
   anything of this project's. `tests/test_pytest_scope.py` keeps the scope and checks that
   nothing inside `tests/` needs gguf-py, so the scope is not hiding a dependency.
+  A test that starts its own server now names the key that server requires. `serve/server.py`
+  takes its key from `--api-key` or, when that is absent, from the run config it picks up - and
+  a config the Build tab wrote has `"0000"` in it - so on a machine that has built a quant
+  `GET /versions`, `POST /history/archive` and the mock pair `--self` starts answered 401 to
+  their own harness. `tests/test_version_routes.py`, `tests/test_chat_archive.py` and
+  `tools/turn_tail_measure.py --self` each start their server with an explicit key and send it
+  back, and they also assert the 401 body `serve/http_auth.py` returns and that `/health` is
+  still open to a probe that has no key.
 - **README**: each tab is described and then shown, with the screenshots in
   `data/media/` (the only files under `data/` that are committed).
 - **Standing tasks in the system prompt** (`prompts/prompt.json`, v9): every chat
@@ -397,3 +498,102 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   is done. `tests/test_prompt_standing_tasks.py` checks the file parses, the tasks name
   paths that exist here, and the rendered prompt stays under the 20,000-character
   ceiling `serve/prompts.py` cuts profiles at.
+- **Stealth browser**: the `browser` MCP server answered every call with "no browser
+  engine is installed" on this box - `invisible_playwright` was in the test venv but not
+  in the one the hub runs (`HyperCore-WebUI/.venv`), so `fetch`, `probe`, `links` and
+  `screenshot` never reached a browser. `pip install invisible-playwright` in that venv
+  (0.40.0) and the sealed Firefox it reuses from `~/.cache/invisible-playwright`
+  (firefox-50, upstream 151.0) makes the engine live: `probe` reports `webdriver: false`,
+  no automation traces and a clean verdict, and `fetch`, `links`, `screenshot` and `close`
+  all work through it. `requirements.txt` now names it as an optional install.
+  Fixed while doing it: `stdio()` ran each `tools/call` on a daemon thread and exited as
+  soon as stdin closed, so a client that sent a call and closed its pipe got no reply at
+  all. The in-flight call threads are now tracked and joined (up to `STDIO_DRAIN_S`, 20 s)
+  before the browser is shut down. `stub_browser.py` gained `STUB_DELAY_MS` so a test can
+  make a call outlive stdin; `test_browser__stdio_drains_in_flight_calls` covers it.
+  `pytest serve/mcp/tests/` 238 passed; ruff and mypy clean on the files touched. The
+  already-running `browser_mcp.py` process picks up the installed engine without a
+  restart (the engine is chosen on the first call), but needs a restart to run the
+  stdio fix. It has restarted: the process the hub is running now (pid 1239117, started
+  20:44:23) is the one with the drain, and `probe` on a plain page reports `webdriver:
+  false`, no automation traces and a clean verdict.
+- **The Build card no longer preselects vision off**: `defaultChoiceValue()` used to fall
+  back to the off value for `--vision` and `--images`, which was the same as the release's
+  answer in 0.1.45 but not in 0.2.0, where vision is on by default wherever the model can
+  read pictures. A build on a box that never touched the card came out text-only. A box is
+  now preselected to the default its release declares, and left unset when the release
+  decides per machine (`--low-ram auto` and `--kv-streaming auto` are still preselected;
+  `--vision` and `--images` are not sent until you pick one). An off value you pick by hand
+  is still said out loud, which is what the `DEFAULT_OFF_FLAGS` change in this section was
+  for. `tests/test_build_off_flags.js` checks both directions.
+- **A build can write its run config on a tree that has no `config/` yet**: the harvest
+  wrote into `config/` without creating it, so the first build on a fresh tree stored an
+  engine and reported `could not write config/run-<quant>.json`. `ensure_run_config()` now
+  makes the directory. Two related guards: a build named `example` no longer writes over
+  the shipped template (`TEMPLATE_NAME` is a shape, not a run config), and the tuner's CLI
+  checks skip on a box without optuna, which `requirements.txt` lists as optional.
+- **The harvest of a setup run in `tmp/` is tested as one step, and a build of a clone uses
+  the quant that run chose**: `quant_store.harvest_setup_run` keys the store on the quant the
+  run actually used - the card's model box can name a model rather than a size, so the size is
+  read from the run config `setup.py` left beside itself - and places the binaries in
+  `engine/engine_<quant>/`, the run config in `config/`, and the runtime files in
+  `engine/engine_<quant>/data/`. No test ran that path end to end, so a build that stored
+  nothing and wrote no config was not caught. `tests/test_quant_store.py` (1 new case) runs a
+  whole clone through it. `build_api.quant_from_choices` now takes the clone and falls back to
+  that same run config, so a rebuild of a clone whose card names a model is stored under the
+  quant its first setup run chose instead of landing in `engine/` as the default engine with no
+  run config of its own (`tests/test_build_api.py`, 1 new case).
+- **The Build tab's release scan now sees a Strata you keep outside `tmp/`**: the scan read
+  only `tmp/`, while `serve/strata_hook.py` runs `setup.py` from the folder the environment
+  names, the folder a run config starts the engine from, or the folders beside this project.
+  The card could name one release and a setup run started from another. `local_releases()`
+  now merges the `tmp/` scan with `strata_hook.search_candidates()` (the same search order,
+  so the two cannot drift), deduplicated by resolved path, and each entry carries the source
+  it came from. A tree outside `tmp/` shows its folder in the dropdown, because its name is
+  not a tag. `tests/test_build_api.py` (2 new cases) and `tests/test_build_tab_releases.js`
+  check the scan and the box.
+- **A run config whose model paths are still placeholders is listed, greyed, with the
+  reason**: `_run_configs()` left those files out entirely, so the Model version dropdown
+  disagreed with `config/` - the file was on disk and the app said there was no version.
+  `template_configs()` lists them, `list_versions()` marks every version `startable` with a
+  `reason`, the dropdown renders a non-startable one disabled with that reason and opens on
+  the first version it can actually start, and `POST /versions/select` refuses one by name
+  instead of reporting it as a missing version. `tests/test_quant_store.py` (1 new case) and
+  `tests/test_version_dropdown.js` check both sides.
+- **`serve/server.py` is no longer one 6,159-line file**: it is 4,882 lines now, with the parts
+  that have a single job moved out into `serve/api_lanes.py` (the OpenAI and Anthropic event
+  shapes, 271 lines), `serve/config_payload.py` (what a run config is turned into, 201),
+  `serve/engine_args.py` (the engine command line, 229), `serve/engine_errors.py` (an engine
+  exit read in the engine's own words, 100), `serve/narration.py` (the Monitor's tool-round text,
+  245), `serve/proc.py` (`popen`, `network_path`, `unload_wait`, the start-log tail, 86),
+  `serve/tokenizing.py` (the tokenizer boundary, 190) and `serve/vision.py` (the vision model
+  probe and its allocation marks, 256). `server.py` imports them by name, so nothing in the
+  routes changed shape; the suite is the proof it still behaves the same.
+- **The MCP hub's own suite runs by default**: `pytest.ini` now has
+  `testpaths = tests serve/mcp/tests`, so a routine `pytest` runs 704 cases instead of 466 - the
+  238 contract tests in `serve/mcp/tests/` used to sit outside the collected set and only ran
+  when someone named the folder. `serve/mcp/web-scrape-mcp/tests` is deliberately not listed: it
+  is a vendored third-party server with its own pyproject and its own pytest configuration.
+  `tests/test_pytest_scope.py` now asserts the two-path scope, and that the vendored suite stays
+  out.
+- **Both spellings of the command collect the same files**: `pythonpath = .` in `pytest.ini` on
+  top of the root `conftest.py`. The `pytest` script does not put the directory it is run from on
+  `sys.path` the way `python3 -m pytest` does, so a bare `pytest` from inside `tests/` stopped at
+  collection with `ModuleNotFoundError: No module named 'serve'`. Three cases are tested: the
+  root, inside `tests/`, and the script itself.
+- **A gate that runs on every push**: `.github/workflows/ci.yml` installs
+  `requirements.txt` + `requirements-dev.txt`, runs `ruff check serve tools optuna_tune tests
+  conftest.py` (clean today), `python -m pytest -q` (704 passed in 117 s on this box), the 18
+  browser-free JS suites under `tests/*.js` with node (all 18 ok), and `mypy` as an advisory step
+  with `continue-on-error` - 268 errors in 31 files today, tracked as a trend rather than made a
+  gate. Nothing in the pipeline needs a GPU or a model pack.
+- **The tooling is declared, not assumed**: `pyproject.toml` (name, version, `requires-python
+  >= 3.11`, the ruff and mypy configuration) and `requirements-dev.txt` (`pytest>=8.0`,
+  `ruff>=0.16`, `mypy>=1.12`). Ruff's rule set is the one the code passes today, so the CI lint
+  step is green and stays green; `E501` is off because this project's docstrings are long by
+  design (the longest line in `serve/` is 348 characters) and `E402` because several files put a
+  directory on `sys.path` before importing from it, which is deliberate.
+- **The UI checks are part of the suite**: `tests/test_js_suites.py` runs each of the 18
+  `tests/*.js` files through node inside pytest, so a Stop/Start pair, the two-click Shut Down,
+  the surface slider or the token-prefix folding regression cannot pass a `pytest` run. A machine
+  without node skips the suite and says why; the skip is reported, never silent.

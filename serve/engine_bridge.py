@@ -23,7 +23,6 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-
 from tools.calibrate_adapter import (
     BUSY,
     CMPFUNC,
@@ -173,7 +172,7 @@ class Engine:
         self.max_context_len = int(caps.max_context_len)
         self.active_pool_workers = int(caps.active_pool_workers)
 
-    def submit(self, config: RequestConfig, tokens: list[int], request_id: int) -> int:
+    def submit(self, config: RequestConfig, tokens: list[int], request_id: int, user_data: int | None = None) -> int:
         arr = (ctypes.c_int32 * len(tokens))(*tokens)
         return self.lib.hypercore_engine_submit(
             self.handle, request_id, ctypes.byref(config), arr, len(tokens), NATIVE_BROKER_HOOK,

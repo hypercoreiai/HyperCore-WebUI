@@ -37,7 +37,9 @@ check(APP.includes("async function loadVersions()"), "app.js has no loadVersions
 check(APP.includes("function renderVersions(active)"), "app.js has no renderVersions");
 check(APP.includes("loadVersions();"), "loadVersions is never called at boot");
 check(APP.includes('fetch("versions/select"'), "the dropdown never posts a choice");
-check(APP.includes("quant: ($(\"build-quant\")"), "build/start does not send the quant the build is for");
+check(APP.includes("quant: buildTargetQuant()"), "build/start does not send the quant the build is for");
+check(APP.includes("function buildTargetQuant()") && APP.includes('$("build-quant")'),
+      "the quant a build is stored under is no longer read from the Build tab field");
 check(SERVER.includes('path == "/versions"'), "GET /versions is not routed");
 check(SERVER.includes("quant_store.view()"), "GET /versions does not call the store");
 check(SERVER.includes('path == "/versions/select"'), "POST /versions/select is not routed");
@@ -46,6 +48,9 @@ check(SERVER.includes("def apply_model_version(svc: Service, entry: dict[str, An
       "serve/server.py has no apply_model_version");
 check(STORE.includes("def materialise(key: str) -> tuple[bool, str]:"),
       "serve/quant_store.py cannot place a build at engine/strata");
+check(STORE.includes("def template_configs() -> list[dict[str, Any]]:"),
+      "serve/quant_store.py has no scan of the run configs whose paths are placeholders");
+check(STORE.includes('"startable"'), "list_versions does not say which versions can be started");
 
 // ---- 2. renderVersions against a stub DOM ------------------------------------
 class El {
@@ -99,6 +104,23 @@ check(dom["build-quant"].value === "q2_0", "the Build tab quant field is not pre
 
 dom = renderWith(V, null);
 check(dom["version-select"].value === "q2_0", "with nothing active the first version is not chosen");
+
+// A config the app cannot start is shown greyed with the reason, so the box matches the
+// files on disk instead of hiding one the user can see.
+const V3 = V.concat([{
+  key: "iq3_xxs", label: "qwen3.8-flash-next-iq3_xxs", quant: "iq3_xxs", version: null,
+  ready: false, active: false, startable: false,
+  reason: "its model paths are still placeholders",
+}]);
+dom = renderWith(V3, V3[0]);
+const opts3 = optionValues(dom["version-select"].innerHTML);
+check(opts3.length === 4, `the dropdown has ${opts3.length} options, expected 4`);
+const greyed = dom["version-select"].children[3];
+check(greyed.disabled === true, "a config that cannot be started is left selectable");
+check(greyed.textContent.includes("placeholders"),
+      "the option does not say why it cannot be started: " + greyed.textContent);
+check(dom["version-select"].value === "q2_0",
+      "the box opens on a version it cannot start, so the first choice is a failed switch");
 
 dom = renderWith([], null);
 check(dom["version-select"].innerHTML.includes("no model versions built"),

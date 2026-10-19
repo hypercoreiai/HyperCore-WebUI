@@ -246,7 +246,9 @@ def manifest(root: Path) -> dict[str, Any]:
     text = read(root / "CMakeLists.txt")
     m = PROJECT_RE.search(text)
     return {
-        "source": str(root),
+        #: where this manifest came from, as an absolute path: a relative one means
+        # nothing to whoever reads the file later, and the Build tab's tests check it.
+        "source": str(Path(root).resolve()),
         "project": m.group(1) if m else "strata",
         "version": m.group(2) if m else None,
         "cmake_options": cmake_options(root),
@@ -287,14 +289,16 @@ def main() -> int:
     if not m["cmake_options"]:
         print(f"no CMake options found in {a.clone}/CMakeLists.txt", file=sys.stderr)
         return 1
-    if a.out:
-        Path(a.out).write_text(json.dumps(m, indent=2), encoding="utf-8")
+    # The change list is part of the manifest the tab reads, so it is computed before
+    # the file is written: writing first would leave the diff out of the file.
     if a.diff:
         try:
             prev = json.loads(Path(a.diff).read_text(encoding="utf-8"))
             m["changes"] = diff(prev, m)
         except (OSError, ValueError) as exc:
             m["changes"] = {"error": f"could not read the previous manifest: {exc}"}
+    if a.out:
+        Path(a.out).write_text(json.dumps(m, indent=2), encoding="utf-8")
     print(json.dumps(m, indent=2))
     return 0
 

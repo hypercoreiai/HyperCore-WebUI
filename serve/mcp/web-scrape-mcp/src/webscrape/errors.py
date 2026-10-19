@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 FILE_TOO_LARGE = "FILE_TOO_LARGE"
 TIMEOUT = "TIMEOUT"
 ACCESS_DENIED = "ACCESS_DENIED"

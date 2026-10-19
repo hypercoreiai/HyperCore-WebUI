@@ -7,8 +7,8 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from webscrape.config import Settings, load_settings
 from webscrape import service
+from webscrape.config import Settings, load_settings
 
 mcp = MCPServer(
     "web-scrape",
