@@ -23,8 +23,6 @@ talks to it over stdin/stdout; `MockEngine` is a scripted stand-in that makes ev
 from __future__ import annotations
 
 import argparse
-import base64
-import codecs
 import collections
 import contextlib
 import ctypes
@@ -36,19 +34,15 @@ import select
 import shutil
 import signal
 import socket
-import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-import urllib.request
 import uuid
 from collections.abc import Iterator
-from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,13 +52,24 @@ import logging
 
 from serve import (
     assist,
+    build_api,
+    chat_archive,
+    quant_store,
     runconfig,
+    strata_hook,
+    tune_api,
 )
 from serve import prompts as agent_prompts
 from serve import responses as responses_api
-from serve import build_api, chat_archive, quant_store, strata_hook, tune_api
-from serve.offline_engine import (DEFAULT_RETRY_S, DeferredEngine, EngineRetry, EngineUnavailable,
-                                 OfflineEngine, UNLOADED_CODE)
+from serve.engine_supervisor import (
+    HyperCoreProcessSupervisor,
+    StreamStalled,
+    WorkerBusy,
+    WorkerRejected,
+    WorkerUnreachable,
+    model_startup_s,
+    unique_socket_path,
+)
 from serve.frontend import (
     ChatTemplate,
     Event,
@@ -79,7 +84,7 @@ from serve.frontend import (
     unmark_think_literals,
 )
 from serve.http_auth import auth_error, key_matches
-from serve.http_origin import (  # the Host/Origin policy: one definition, shared with serve/flood_stub.py
+from serve.http_origin import (  # the Host/Origin policy: one definition, shared with tools/flood_stub.py
     LOOPBACK_NAMES,
     host_allowed,
     host_name,
@@ -87,20 +92,12 @@ from serve.http_origin import (  # the Host/Origin policy: one definition, share
     lan_addresses,
     origin_allowed,
 )
-from serve.engine_supervisor import (
-    HyperCoreProcessSupervisor,
-    StreamStalled,
-    WorkerBusy,
-    WorkerRejected,
-    WorkerUnreachable,
-    model_startup_s,
-    unique_socket_path,
-)
 from serve.ipc_parser import (
     STREAM_TERMINAL,
     STREAM_TOKEN,
     derive_monitor_field,
 )
+from serve.offline_engine import DEFAULT_RETRY_S, UNLOADED_CODE, DeferredEngine, EngineRetry, EngineUnavailable, OfflineEngine
 
 logger = logging.getLogger("hypercore.server")
 if not logger.handlers:
@@ -109,6 +106,55 @@ if not logger.handlers:
     logger.addHandler(_stream_handler)
     logger.setLevel(logging.INFO)
 
+from serve.api_lanes import (
+    anthropic_collect,
+    anthropic_events,
+    openai_chunks,
+    openai_collect,
+    prompt_progress,
+    structured_chunks,
+)
+from serve.config_payload import (
+    clean_shared_defaults,
+    is_inline_config,
+    parse_config_object,
+    resolve_configuration_payload,
+    sampling_defaults_from_config,
+    verbatim_object_slice,
+)
+from serve.engine_args import (
+    child_env,
+    effort_end_args,
+    engine_args,
+    engine_silence_s,
+    gpu_list,
+    hip_visible,
+    layer_split_value,
+    learned_profile_args,
+    parallel_args,
+    profile_shape,
+    vision_env,
+)
+
+# serve/server.py used to be one 6,159-line file. These are the pieces that have their own
+# behaviour and can be tested on their own: the engine contract, process plumbing, log narration,
+# the vision model, config parsing, tokenizing, engine argv, and the OpenAI/Anthropic wire shapes.
+# Every name is re-imported here so `serve.server.Vision` and the rest keep working for callers
+# and for the existing tests.
+from serve.engine_errors import (
+    IM_END,
+    Engine,
+    EngineDied,
+    EngineSilent,
+    EngineStarting,
+    EngineStopped,
+    EngineStuck,
+    GpuBusy,
+    MockEngine,
+    ModelBusy,
+    SessionRefused,
+    SlotRefused,
+)
 from serve.mcp import (
     COMPACT_PROMPT,
     McpCancelled,
@@ -117,6 +163,18 @@ from serve.mcp import (
     plan_compaction,
     shrink_messages,
 )
+from serve.narration import (
+    ConvCacheLog,
+    btrace,
+    conversation_cache_view,
+    echo_requests,
+    expert_config_line,
+    experts_loading_words,
+    narrate_start,
+    narrate_worker_start,
+    worker_start_words,
+)
+from serve.proc import network_path, popen, start_failure_hint, start_log_tail, unload_wait
 from serve.responses import ResponsesError
 from serve.responses import error_body as responses_error_body
 from serve.structured import (
@@ -124,26 +182,22 @@ from serve.structured import (
     prepare_format,
     validated_json,
 )
-from serve.winjob import contain
+from serve.tokenizing import (
+    TAIL_CHECK_MAX,
+    TAIL_CHECK_PROMPT,
+    ByteTokenizer,
+    Detokenizer,
+    StopMatcher,
+    TailHold,
+    stop_strings,
+    tail_is_done,
+    tail_normalize,
+)
+from serve.vision import Vision, vision_start_reason
 
-IM_END = "<|im_end|>"
 IMAGE_PAD = "<|image_pad|>"
-IMAGE_URL_MAX = 32 << 20  # an image URL is read up to this (the web app attaches pictures of up to 20 MB)
 
 
-def popen(what: str, args: list, **kw):
-    """#735: subprocess.Popen, but Windows' refusal to start a program (WinError 4551, or 1260 when a policy blocks it:
-    Smart App Control on a clean Windows 11 blocks an exe that is not signed) is said in words instead of a bare
-    OSError."""
-    try:
-        return subprocess.Popen(args, **kw)
-    except OSError as e:
-        if getattr(e, "winerror", None) in (4551, 1260):
-            raise OSError(f"Windows blocked {what} ({args[0]}): Smart App Control, or an application-control policy, does "
-                          "not let a program that is not signed run. Turn Smart App Control off (Windows Security > App "
-                          "& browser control > Smart App Control settings), or - for the image encoder only - run setup "
-                          "with --vision no (see docs/TROUBLESHOOTING.md)") from e
-        raise
 
 
 def listen_problem(host: str, port: int, e: OSError) -> str:
@@ -263,7 +317,6 @@ RATE_MIN_SPAN_S = 0.25      # younger than this there is no rate yet: the mean s
 # #481: a running request whose engine prints nothing (no T, PP or any other line) for this long has lost step with the
 # server (the engine's main thread waits, untimed, for its next command): the engine is ended and the request fails;
 # the next request starts it again.  The config's "engine_silence_s" sets it (0: wait forever, as before).
-ENGINE_SILENCE_S = 300.0
 # Disk sessions: the longest allowance an engine may announce (`SWAIT <phase> <s>`) for one step that blocks in a
 # single call (a file flush, the host->device transfer); the engine's own bound is the same (session_phase_limit_s).
 SESSION_WAIT_MAX_S = 3600
@@ -276,406 +329,60 @@ PP_SLACK = 3.0
 
 
 # ------------------------------------------------------------------------------------------------ engines
-class Engine(Protocol):
-    max_context: int
-    def generate(self, ids: list[int], max_new: int, sampling: dict, cancel: threading.Event) -> Iterator[int]: ...
 
 
-class MockEngine:
-    """Replays a scripted completion (text) as token ids, one per step, then the end-of-turn token.  Given a list of
-    scripts, each request gets the next one and the last one repeats (a tool call, then the answer after it)."""
-
-    def __init__(self, tokenizer, script: str | list[str], max_context: int = 32768, delay_s: float = 0.0):
-        self.tok, self.max_context, self.delay = tokenizer, max_context, delay_s
-        end = tokenizer.encode(IM_END, parse_special=True)
-        self.scripts = [tokenizer.encode(x, parse_special=True) + end for x in ([script] if isinstance(script, str)
-                                                                                 else script)]
-        self.script, self.turns = self.scripts[0], 0
-        self.last_prompt: list[int] = []
-
-    def generate(self, ids, max_new, sampling, cancel, embeddings=None):
-        self.last_prompt = list(ids)
-        self.last_embeddings = embeddings
-        if len(self.scripts) > 1:
-            self.script = self.scripts[min(self.turns, len(self.scripts) - 1)]
-            self.turns += 1
-        for t in self.script[:max_new]:
-            if cancel.is_set():
-                return
-            if self.delay:
-                time.sleep(self.delay)
-            yield t
 
 
-class EngineDied(RuntimeError):
-    """The engine process ended in the middle of a request (issue #27: on Linux, the out-of-memory killer)."""
 
 
-class EngineStarting(RuntimeError):
-    """The engine is (re)starting and has not said READY yet (#344): no context size to plan a request with - a 503,
-    not a 400 about the prompt."""
 
 
-class ModelBusy(RuntimeError):
-    """Explicit model controls must not interrupt active or queued requests."""
 
 
-class EngineSilent(EngineDied):
-    """#481: the engine said nothing for too long during a request (or never acknowledged a STOP): the two sides lost
-    step - the engine waiting for its next command, the server for this request's end - and the server ended it.  An
-    EngineDied, so the request ends with an error and the next one starts the engine again."""
 
 
-class SessionRefused(ValueError):
-    """Disk sessions: the engine refused or failed a SAVE / RESTORE and is still in step (`SERR <kind> <published>
-    <reason>`).  `kind` is the engine's category - invalid (400), storage (507), memory (503), io (500); `published`:
-    a save whose new file already replaced the old one before a later step (the folder flush) failed."""
-
-    STATUS = {"invalid": 400, "storage": 507, "memory": 503, "io": 500}
-
-    def __init__(self, kind: str, message: str, published: bool = False):
-        super().__init__(message)
-        self.kind = kind if kind in self.STATUS else "io"
-        self.published = published
-
-    @property
-    def status(self) -> int:
-        return self.STATUS[self.kind]
 
 
-class EngineStuck(RuntimeError):
-    """The engine process did not end after QUIT, terminate and kill: the server keeps it (and says so) rather than
-    reporting its GPU and RAM as given back."""
 
 
-class EngineStopped(RuntimeError):
-    """The engine was stopped with POST /v1/stop and has not been started again. A request that arrives while it is
-    stopped is refused (409) instead of quietly loading the model behind the button and answering with nothing: an
-    empty reply reaches the Monitor as a turn that ran out of tokens."""
 
 
-class GpuBusy(RuntimeError):
-    """The model is unloaded and the GPU has less free VRAM than min_free_vram_mib: something else (a game, another
-    model server) is using it, so the engine is not started into the little that is left.  `retry_after`: seconds for
-    the Retry-After header of the 503."""
-
-    def __init__(self, message="", retry_after=None):
-        super().__init__(message)
-        self.retry_after = retry_after
 
 
-class SlotRefused(RuntimeError):
-    """#1994: the engine would not take a batch slot after several tries (its view of the slots and the server's
-    differ, or it is full).  Not the request's fault: a retryable 503, never a 400 about the conversation."""
-
-    def __init__(self, message="", retry_after=None):
-        super().__init__(message)
-        self.retry_after = retry_after
 
 
-def unload_wait(value, default: float) -> float | None:
-    """#1997: `?wait=` on POST /unload: no value means do not wait, a bare `wait` waits the default, `wait=60` that
-    many seconds.  A client that wants the GPU back now (another model server unloading) gets a real wait instead of a
-    409 busy on the first try."""
-    if value is None:
-        return None
-    try:
-        return float(value) if value.strip() else default
-    except ValueError:
-        return default
 
 
-ENGINE_REQUEST = re.compile(
-    # "+ 12288 of 98179 read": a request cancelled while its prompt was read (#471)
-    r"prompt (?P<prompt>\d+) tokens = (?P<reused>\d+) reused \+ \d+(?: of \d+)? read in (?P<read>[\d.]+) ms "
-    r"\((?P<pp>[\d.]+) tok/s\), "
-    r"(?P<gen>\d+) generated in (?P<gen_ms>[\d.]+) ms \((?P<tg>[\d.]+) tok/s\)")
 
 
 _echoing: set[str] = set()      # the logs echo_requests already follows (restart() runs HyperCoreEngine.__init__ again)
 
-DRAFT_HEAD_FAIL = "the draft head does not fit"
-DRAFT_HEAD_HINT = ("a smaller draft vocabulary needs less VRAM: --draft-vocab cyrillic (English, code and the Cyrillic "
-                   "script) or --draft-vocab en (English and code, ~215 MiB less than the default). Start once with "
-                   "it - START-HERE.bat --draft-vocab en (Windows) or ./setup.sh --draft-vocab en - and the model "
-                   "keeps it; or a smaller --context in setup.")
 
 
-def start_failure_hint(log: str | None, offset: int) -> str:
-    """#474: what to change when the engine stopped at the start because the MTP draft head did not fit the VRAM
-    left: the engine's own `hypercore mtp:` lines after that failure (0.1.36+: what it needs, what is free, the smaller
-    subsets), else the same advice in words for an older engine.  "" for any other failure: the log says why."""
-    if not log:
-        return ""
-    try:
-        with open(log, "rb") as f:
-            f.seek(offset)
-            text = f.read().decode("utf-8", "replace")
-    except (OSError, ValueError):
-        return ""
-    if DRAFT_HEAD_FAIL not in text:
-        return ""
-    said = [x.strip()[len("hypercore mtp: "):] for x in text.splitlines()
-            if x.strip().startswith("hypercore mtp: ") and ("draft head over" in x or "hint:" in x)]
-    return ". mtp: " + DRAFT_HEAD_FAIL + ". " + (" ".join(said) if said else "Hint: " + DRAFT_HEAD_HINT)
 
 
-def start_log_tail(log: str | None, offset: int, n: int = 20) -> str:
-    """#496: the last n lines this start wrote to the engine log, for the error when the engine ended before READY -
-    whatever the failure, the engine's own reason is in them (people posted the traceback without the log).  "" when
-    there is no log or nothing in it from this start."""
-    if not log:
-        return ""
-    try:
-        with open(log, "rb") as f:
-            f.seek(0, 2)
-            start = max(offset, f.tell() - 64 * 1024)   # enough for 20 lines, never an earlier start's
-            f.seek(start)
-            text = f.read().decode("utf-8", "replace")
-    except (OSError, ValueError):
-        return ""
-    lines = text.splitlines()[1 if start > offset else 0:]   # not a line cut in half
-    lines = [x.rstrip() for x in lines if x.strip()][-n:]
-    if not lines:
-        return ""
-    return "\nthe engine log's last lines:\n" + "\n".join("  " + x for x in lines)
 
 
-def echo_requests(log_path: str, offset: int) -> None:
-    """HYPERCORE_REQUEST_LINES=1: one stdout line per finished request, from the engine's own summary in its log.
-
-    The engine's stderr goes to the log file (the start narrator reads it), so a supervisor that only sees this
-    process's output - a tray, llama-swap - has no per-request numbers. This re-states the engine's line with the
-    total the two times make: `request prompt P cached C output O prompt_read R ms total S ms prefill X tok/s decode Y
-    tok/s` (prompt_read: the time the engine spent reading the prompt's new tokens, not a time to first token).
-    """
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        f.seek(offset)
-        while True:
-            line = f.readline()
-            if not line:
-                time.sleep(0.2)
-                continue
-            m = ENGINE_REQUEST.search(line)
-            if m:
-                read_ms, gen_ms = float(m["read"]), float(m["gen_ms"])
-                print("[hypercore] request prompt %s cached %s output %s prompt_read %.0f ms total %.0f ms prefill %s "
-                      "tok/s decode %s tok/s" % (m["prompt"], m["reused"], m["gen"], read_ms, read_ms + gen_ms, m["pp"],
-                                                 m["tg"]), flush=True)
 
 
-def experts_loading_words(args: list, size: str) -> str:
-    """#505: what the start does with the experts, by the engine's flags (generate.cpp's option parsing): a RAM budget
-    copies the hottest N GiB into RAM (--resident-budget-gib), the resident low-RAM mode the ones the GPU does not hold
-    (--resident-experts), plain --mmap-experts reads them from the model files through the OS file cache (nothing is
-    loaded into RAM up front); otherwise all of them go into RAM."""
-    if "--resident-budget-gib" in args:
-        try:
-            n = f"up to {float(args[args.index('--resident-budget-gib') + 1]):g} GiB"
-        except (IndexError, ValueError):
-            n = "a RAM budget"
-        return (f"loading the most-used experts into RAM ({n}; the rest are read from the model files as needed) "
-                "and locking part of them for the GPU.")
-    if "--resident-experts" in args:
-        return (f"loading the experts the GPU does not hold into RAM (of {size}) and locking part of them for the "
-                "GPU.")
-    if "--mmap-experts" in args:
-        return (f"mapping the experts from the model files ({size}, --mmap-experts): they are not loaded into RAM - "
-                "the OS file cache reads them as the GPU's expert cache fills and as requests need them.")
-    return f"loading the experts into RAM ({size}) and locking part of them for the GPU."
 
 
-def narrate_start(log_path: str, offset: int, args: list, done: threading.Event, heartbeat=20.0) -> None:
-    """While the engine starts, say in the server window what it is doing, from its log: the start reads tens of GB
-    into RAM and locks part of it for the GPU, and on many PCs everything is slow or frozen for a minute or more -
-    people closed the window thinking it had hung.  The warning comes at that step, not after it."""
-    gb = 0.0
-    if "--native" in args:                              # about the size of the experts it will read
-        try:
-            gb = os.path.getsize(args[args.index("--native") + 1]) / 1e9
-        except (OSError, IndexError):
-            pass
-    size = f"about {gb:.0f} GB" if gb >= 1 else "tens of GB"
-    loading = experts_loading_words(args, size)
-    t0 = last = time.time()
-    said = set()
-
-    def say(key, text):
-        nonlocal last
-        if key not in said:
-            said.add(key)
-            last = time.time()
-            print(text, flush=True)
-
-    say("weights", "[hypercore] starting the engine: reading the model's weights ...")
-    pos = offset
-    while not done.wait(0.5):
-        try:
-            with open(log_path, "rb") as f:
-                f.seek(pos)
-                chunk = f.read()
-        except OSError:
-            chunk = b""
-        if chunk.count(b"\n"):
-            cut = chunk.rfind(b"\n") + 1
-            pos += cut
-            for line in chunk[:cut].decode("utf-8", "replace").splitlines():
-                if "PLE on" in line or "expert arena:" in line or "experts via mmap" in line:   # #505: mapped
-                    say("arena", f"[hypercore] {loading}\n"
-                                 "         YOUR PC CAN BE SLOW OR STOP RESPONDING FOR 1-3 MINUTES NOW - this is normal.\n"
-                                 "         Please wait and don't close this window; the browser opens when it is ready.")
-                elif " loaded " in line and "GiB at" in line:
-                    say("loaded", "[hypercore] experts loaded: " + line.split(" loaded ", 1)[1].strip() +
-                        f" ({time.time() - t0:.0f} s so far)")
-                elif "expert cache " in line and " slots, " in line and "auto" not in line:
-                    n = line.split("expert cache ", 1)[1].split(";")[0].replace(" slots,", " experts,").strip()
-                    say("cache", f"[hypercore] filling the GPU's expert cache ({n}) ...")
-                elif "session is up" in line:
-                    say("up", "[hypercore] almost ready ...")
-        if time.time() - last > heartbeat:
-            last = time.time()
-            print(f"[hypercore] still starting ({time.time() - t0:.0f} s) - please wait ...", flush=True)
 
 
-def worker_start_words(supervisor) -> tuple[str, list[str]] | None:
-    """What the narrator needs from a supervisor: the file its worker's stderr goes to, and the
-    engine flags that worker was started with (its own config).  None without a log: there is
-    nothing to read, and the window then says nothing about the minutes of loading (#505)."""
-    log = getattr(supervisor, "stderr_log", None)
-    if not log:
-        return None
-    try:
-        cfg = json.loads(getattr(supervisor, "config", "") or "{}")
-    except (TypeError, ValueError):
-        cfg = {}
-    return str(log), list(cfg.get("engine_args") or [])
 
 
-def narrate_worker_start(supervisor, ready: threading.Event) -> None:
-    """Say in the server window what the worker is doing while it starts, from its log (#505).
-    Daemon thread, stopped by `ready`: the start reads tens of GB into RAM and locks part of it
-    for the GPU, and on many PCs everything freezes for a minute or more - people closed the
-    window thinking it had hung."""
-    words = worker_start_words(supervisor)
-    if not words:
-        return
-    log, args = words
-    threading.Thread(target=narrate_start, args=(log, 0, args, ready), daemon=True).start()
 
 
-EXPERT_SOURCE_NAMES = {
-    0: "no expert tier",
-    1: "mapped read-only from the pack (--mmap-experts)",
-    2: "the arena copy (--expert-cache)",
-    3: "resident in page-locked RAM (--resident-experts)",
-}
 
 
-def expert_config_line(info: dict) -> str:
-    """The expert configuration the worker resolved, in one line, when setup finishes.
-
-    The engine prints all of this at startup, but to its own log file. In the split
-    architecture the worker's stderr goes to that log and not to the terminal, so the person
-    starting the server sees a model name and a port and nothing about the tier that decides
-    whether the run is fast. This is that line, from the numbers the worker already reports.
-    """
-    slots = int(info.get("expert_slots") or 0)
-    full = int(info.get("expert_slots_full") or 0)
-    mib = int(info.get("expert_cache_mib") or 0)
-    full_mib = int(info.get("expert_cache_full_mib") or 0)
-    source = info.get("expert_source")
-    free = info.get("vram_free_mib")
-    if source is None:
-        return ("[hypercore] expert configuration: the worker did not report one. "
-               "Its log holds the detail: " + str(info.get("log") or "(no log configured)"))
-    parts = [f"{slots} of {full} VRAM expert slots" if full else f"{slots} VRAM expert slots",
-            f"{mib / 1024:.2f} GiB" + (f" of {full_mib / 1024:.2f} GiB" if full_mib > mib else "")]
-    line = "[hypercore] expert configuration: " + ", ".join(parts) + " held by " + EXPERT_SOURCE_NAMES.get(int(source), f"source {source}")
-    if free:
-        line += f" ({free} MiB of VRAM free when it was sized)"
-    if info.get("prompt_chunk"):
-        line += f", prompt chunk {info['prompt_chunk']} tokens"
-    if info.get("pcie_frac") is not None and info.get("pcie_frac") >= 0:
-        line += f", pcie_frac {info['pcie_frac']:.2f}"
-    return line
 
 
-class ConvCacheLog:
-    """#596: the engine's conversation cache as its log tells it (the engine writes "hypercore serve: conversation
-    cache: parked N tokens ...; parked=P bytes=B evictions=E" and "restored N tokens ...; parked=P bytes=B" to stderr,
-    which is the log): read on from where it was last read, from the start of the engine's current run."""
-    EVENT = re.compile(r"conversation cache: (parked|skipped|restored) (\d+) tokens.*?parked=(\d+) bytes=(\d+)"
-                       r"(?: evictions=(\d+))?")
-    DROPPED = re.compile(r"conversation cache: dropped \d+ superseded .*?parked=(\d+)")
-    READ_MAX = 1 << 20                                  # at most the last MiB of new lines per read
-
-    def __init__(self):
-        self.key, self.pos = None, 0
-        self.reset()
-
-    def reset(self):
-        self.state = {"parked": 0, "bytes": 0, "evictions": 0, "parks": 0, "restores": 0, "last_event": None,
-                      "last_tokens": None, "last_at": None}
-
-    def poll(self, path, start) -> dict:
-        """The state after the log's new lines; `start` is where the engine's current run began in it."""
-        if not path or start is None:
-            return dict(self.state)
-        if self.key != (path, start):                   # another start of the engine: its cache starts empty
-            self.key, self.pos = (path, start), start
-            self.reset()
-        try:
-            size = os.path.getsize(path)
-            if size < self.pos:                         # the log was emptied or replaced
-                self.pos = 0
-            if size - self.pos > self.READ_MAX:
-                self.pos = size - self.READ_MAX
-            with open(path, "rb") as f:
-                f.seek(self.pos)
-                data = f.read(size - self.pos)
-        except OSError:
-            return dict(self.state)
-        end = data.rfind(b"\n") + 1                     # whole lines only: the rest is read next time
-        self.pos += end
-        now = time.time()
-        for line in data[:end].decode("utf-8", "replace").splitlines():
-            if "conversation cache:" not in line:
-                continue
-            m = self.EVENT.search(line)
-            if m:
-                st = self.state
-                st["parked"], st["bytes"] = int(m.group(3)), int(m.group(4))
-                if m.group(5) is not None:
-                    st["evictions"] = int(m.group(5))
-                if m.group(1) != "skipped":
-                    st["parks" if m.group(1) == "parked" else "restores"] += 1
-                    st["last_event"], st["last_tokens"], st["last_at"] = m.group(1), int(m.group(2)), now
-                continue
-            m = self.DROPPED.search(line)
-            if m:
-                self.state["parked"] = int(m.group(1))
-        return dict(self.state)
 
 
-def conversation_cache_view(info: dict, hist: list, totals: dict, parked: dict) -> dict:
-    """#596: the Monitor's Conversation cache card: the parked conversations (the engine's opt-in
-    --conversation-cache-mib: budget, slots, what its log says) and how much of the prompts the cache gave back."""
-    mib = info.get("conversation_cache_mib")
-    last = hist[-1] if hist else None
-    return {"enabled": isinstance(mib, int) and mib > 0, "budget_mib": mib if isinstance(mib, int) else None,
-            "slots": info.get("conversation_cache_slots"), **parked,
-            "requests": len(hist), "requests_reused": sum(1 for r in hist if (r.get("reused") or 0) > 0),
-            "reused_tokens": totals.get("reused", 0), "prompt_tokens": totals.get("prompt_tokens", 0),
-            "last_reused": last.get("reused") if last else None,
-            "last_prompt": last.get("prompt_tokens") if last else None}
 
 
-_BTRACE = bool(os.environ.get("HYPERCORE_BATCH_TRACE"))
 
 
-def btrace(*a):
-    if _BTRACE:
-        print("[batch-trace]", threading.get_ident() % 10000, *a, file=sys.stderr, flush=True)
 
 
 EOS_IDS = {248044, 248046}   # <|endoftext|>, <|im_end|>: the engine's default --eos-ids
@@ -691,578 +398,47 @@ FATAL_PREFIXES = ("ERR verify: timed out at layer ", "ERR verify batch: timed ou
 # constructed by production code; it is a test fixture and lives in
 # serve/fixtures/legacy_engine.py. Import it from there if a suite needs it.
 
-def network_path(path: str) -> bool:
-    r"""A path to another computer: \\host\share or //host/share (either slash), \\?\UNC\host\..., \\.\UNC\host\...
-    or the NT form \??\UNC\host\...  Windows connects to that host at the first look at the path (os.path.isfile is
-    enough) and signs in with the user's NTLM credentials.  \\?\ and \??\ name local files too; no client needs them."""
-    p = path.replace("/", "\\")
-    return p.startswith("\\\\") or p.startswith("\\??\\")
 
 
-VISION_ALLOC_MARKS = ("cudaMalloc", "alloc_tensor_range", "GGML_ASSERT", "out of memory")
-ENGINE_LINES = ("hypercore serve:", "hypercore generate:", "hypercore_worker:", "hypercore mtp:",
-                "hypercore verify:", "hypercore hc:", "FileExpertSource:")
-VISION_VRAM_MIB = 1400          # the GPU encoder's share: 865 MiB of BF16 mmproj tensors + its CUDA context + work buffers
-VISION_VRAM_HINT = (" - the image encoder needs its own share of VRAM (about 1.4 GB with --vision gpu): run setup "
-                    "with --vision cpu, give it a card of its own (vision.cuda_device in the config), or free the "
-                    "one it is on (docs/TROUBLESHOOTING.md)")
 
 
-def vision_start_reason(log: str | None, offset: int) -> str:
-    """What the image encoder said before it died: after `offset` in the log its stderr went to - the model's log is
-    shared with the engine, so the engine's lines are skipped - the line naming an allocation (the most actionable
-    mark first), else its last line.  "" with no log or nothing new in it."""
-    if not log:
-        return ""
-    try:
-        with open(log, "rb") as f:
-            f.seek(offset)
-            lines = [x.strip() for x in f.read().decode("utf-8", "replace").splitlines()
-                     if x.strip() and not x.strip().startswith(ENGINE_LINES)]
-    except OSError:
-        return ""
-    for mark in VISION_ALLOC_MARKS:
-        for line in lines:
-            if mark in line:
-                return line
-    return lines[-1] if lines else ""
 
 
-class Vision:
-    """The resident image encoder: `hypercore-vision` (llama.cpp mtmd + the mmproj file) reads `ENC <image> <out>`
-    lines and writes each image's embeddings; results are cached by the image's hash, so a conversation that
-    sends the same picture again (every turn, with most clients) encodes it once."""
-
-    @staticmethod
-    def work_dir() -> Path:
-        """#480: the directory for the encoder's files.  The engine reads the embeddings file named in a `GENI` line
-        and the encoder the output named in an `ENC <image> <out>` line, both split at spaces, so a space in the path
-        (a %TEMP% under a user name with a space) broke every image.  The system temp directory is used while its path
-        has no space, then the working directory, then the system drive's root; the plain temp directory is the last
-        resort (the encoder's own files are then named relative to it, see `_start`)."""
-        for parent in (None, Path.cwd(), Path(os.environ.get("SystemDrive", "C:") + os.sep)):
-            try:
-                d = Path(tempfile.mkdtemp(prefix="hypercore-vision-", dir=parent))
-            except OSError:
-                continue                                       # not writable, or no such drive
-            if " " not in str(d):
-                return d
-            try:
-                d.rmdir()                                      # just created, so still empty
-            except OSError:
-                pass
-        return Path(tempfile.mkdtemp(prefix="hypercore-vision-"))
-
-    def __init__(self, cfg: dict, log=None, env: dict | None = None):
-        absolute = lambda p: os.path.abspath(p) if os.path.dirname(str(p)) else p   # the encoder runs in its own dir (#480)
-        args = [absolute(cfg["exe"]), "--mmproj", absolute(cfg["mmproj"]), "--model", absolute(cfg["model"])]
-        if cfg.get("gpu"):
-            args.append("--gpu")
-        if cfg.get("threads"):
-            args += ["--threads", str(cfg["threads"])]
-        if cfg.get("max_tokens"):
-            args += ["--max-tokens", str(cfg["max_tokens"])]
-        if cfg.get("min_tokens"):                       # #767: mtmd's image_min_tokens (a hand-edited key)
-            args += ["--min-tokens", str(cfg["min_tokens"])]
-        self.dir = self.work_dir()
-        self.spawn = (args, log, env)                   # to start it again after an unload
-        self.cpu_only = False                           # set when the card had no room for the encoder
-        self.stopped = False
-        self._start()
-        self.lock = threading.Lock()
-        self.cache: dict[str, tuple[Path, int]] = {}
-
-    def _start(self, args: list | None = None):
-        args = list(self.spawn[0]) if args is None else list(args)
-        log, env = self.spawn[1], self.spawn[2]
-        # where this start's lines begin in the log: an append-mode handle reports 0 until it is written to, and the
-        # lines of an earlier start would then be read as the encoder's own
-        log_path = getattr(log, "name", None)
-        log_start = os.path.getsize(log_path) if log_path else 0
-        # cwd is the encoder's directory: the ENC lines name the files relative to it (#480: no space in the line)
-        self.proc = popen("the image encoder", args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          stderr=log or subprocess.DEVNULL, text=True, encoding="utf-8", bufsize=1, env=env,
-                          cwd=self.dir)
-        contain(self.proc)
-        for line in iter(self.proc.stdout.readline, ""):
-            if line.startswith("READY"):
-                self.stopped = False
-                return
-            if line.startswith("ERR"):                       # the encoder's own "cannot do this"
-                raise RuntimeError("the vision encoder did not start: " + line.strip())
-            # anything else on stdout before READY is noise (a crash reporter's stack trace, a loader warning):
-            # the reason is on stderr, which went to the log
-        code = self.proc.wait()
-        why = vision_start_reason(log_path, log_start)
-        if "--gpu" in args and not self.cpu_only and any(m in why for m in VISION_ALLOC_MARKS):
-            # the card has no room for the encoder: a chat that answers is better than one that will not start
-            print(f"[hypercore] the image encoder does not fit the VRAM left on the card ({why}). It runs on the "
-                  "CPU instead - pictures are slow (about 3-13 s) but they work. To keep it on the GPU, run setup "
-                  f"again with --vram-reserve-mib {VISION_VRAM_MIB} or --vision cpu (docs/TROUBLESHOOTING.md).",
-                  flush=True)
-            self.cpu_only = True
-            self.spawn = ([a for a in args if a != "--gpu"], log, env)   # a restart stays on the CPU
-            return self._start([a for a in args if a != "--gpu"])
-        hint = VISION_VRAM_HINT if any(m in why for m in VISION_ALLOC_MARKS) else ""
-        raise RuntimeError(f"the vision encoder did not start (it exited with {code})" +
-                          (": " + why if why else "") + hint)
-
-    def alive(self) -> bool:
-        return not self.stopped and self.proc.poll() is None
-
-    def unload(self):
-        """Stop the encoder process (its VRAM or RAM goes back); the encoded images stay cached on disk."""
-        self.close()
-        self.stopped = True
-
-    def restart(self):
-        """Start the encoder again after an unload (or if it died); the cache of encoded images is kept."""
-        try:
-            self.proc.kill()
-        except OSError:
-            pass
-        self._start()
-
-    @staticmethod
-    def load(source: str) -> bytes:
-        if source.startswith("data:"):
-            try:
-                return base64.b64decode(source.split(",", 1)[1])
-            except (IndexError, ValueError) as e:                # no comma, or not base64
-                raise ValueError(f"the image's data: URL could not be read ({e})") from None
-        if source.startswith(("http://", "https://")):
-            return Vision.download(source)
-        path = source.removeprefix("file://")
-        # refused before anything looks at the path: file://host/share/x.png is \\host\share\x.png ("file://C:/x.png",
-        # a drive, is a client's spelling of file:///C:/x.png)
-        host = re.split(r"[/\\]", path, maxsplit=1)[0] if source.startswith("file://") else ""
-        if network_path(path) or host and not re.fullmatch(r"[A-Za-z]:|localhost", host, re.IGNORECASE):
-            raise ValueError("an image file must be on this computer: network paths (\\\\host\\share, //host/share, "
-                             "file://host/...) are not read")
-        if path and os.path.isfile(path):
-            try:
-                return Path(path).read_bytes()
-            except OSError as e:
-                raise ValueError(f"the image could not be read from {path} ({e})") from None
-        raise ValueError("an image must be a data: URL, an http(s) URL or a local file path")
-
-    @staticmethod
-    def download(url: str) -> bytes:
-        """An image URL's bytes, at most IMAGE_URL_MAX of them: the whole response was read, so a huge or endless one
-        filled the memory.  One that cannot be read is a ValueError (a 400 that says so), not a dropped connection."""
-        too_big = f"the image URL's file is over {IMAGE_URL_MAX >> 20} MiB"
-        try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "hypercore"}), timeout=60) as r:
-                size = r.headers.get("Content-Length") or ""
-                if size.isdigit() and int(size) > IMAGE_URL_MAX:
-                    raise ValueError(too_big)
-                data = r.read(IMAGE_URL_MAX + 1)
-        except (OSError, HTTPException) as e:
-            raise ValueError(f"the image URL could not be read: {e}") from None
-        if len(data) > IMAGE_URL_MAX:
-            raise ValueError(too_big)
-        return data
-
-    @staticmethod
-    def normalize(data: bytes) -> bytes:
-        """The formats hypercore-vision's decoder (stb_image) reads pass through; anything else is converted to PNG."""
-        if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or data[:2] == b"BM" or \
-                data[:6] in (b"GIF87a", b"GIF89a"):
-            return data
-        try:
-            import io
-
-            from PIL import Image
-        except ImportError:
-            raise ValueError("this image format needs Pillow (python -m pip install pillow); JPEG, PNG, BMP and "
-                             "GIF work without it") from None
-        try:
-            im = Image.open(io.BytesIO(data))
-            im.load()
-        except Exception as e:
-            raise ValueError(f"the image could not be read ({e})") from None
-        if im.mode in ("RGBA", "LA", "P") and "transparency" in im.info or im.mode in ("RGBA", "LA"):
-            im = im.convert("RGBA")
-            bg = Image.new("RGB", im.size, (255, 255, 255))   # transparent areas become white, not black
-            bg.paste(im, mask=im.split()[-1])
-            im = bg
-        elif im.mode != "RGB":
-            im = im.convert("RGB")
-        out = io.BytesIO()
-        im.save(out, format="PNG")
-        return out.getvalue()
-
-    def encode(self, source: str | bytes) -> tuple[Path, int]:
-        """-> (embeddings file, number of image tokens).  `source`: what load() reads, or the image's bytes."""
-        data = self.normalize(source if isinstance(source, bytes) else self.load(source))
-        key = hashlib.sha256(data).hexdigest()[:32]
-        with self.lock:
-            if key in self.cache:
-                return self.cache[key]
-            img, out = self.dir / f"{key}.img", self.dir / f"{key}.sve"
-            img.write_bytes(data)
-            try:
-                self.proc.stdin.write(f"ENC {img.name} {out.name}\n")      # relative to the encoder's cwd (#480)
-                self.proc.stdin.flush()
-                line = self.proc.stdout.readline().strip()
-            finally:                                                   # #352: also when the encoder's pipe is gone
-                img.unlink(missing_ok=True)
-            if not line.startswith("OK"):
-                raise ValueError("the image could not be read: " + (line[4:] if line.startswith("ERR") else
-                                                                     "the vision encoder stopped"))
-            self.cache[key] = (out, int(line.split()[1]))
-            if len(self.cache) > 64:                                   # oldest first
-                old = next(iter(self.cache))
-                self.cache.pop(old)[0].unlink(missing_ok=True)
-            return self.cache[key]
-
-    def close(self):
-        try:
-            self.proc.stdin.write("QUIT\n")
-            self.proc.stdin.flush()
-            self.proc.wait(timeout=10)
-        except Exception:
-            self.proc.kill()
-
-    def shutdown(self):
-        """#914: close() for good: the server ends, so the encoder's directory (one ~10 MB .sve per image, on a tmpfs
-        /tmp that is RAM) goes with it instead of piling up with every start.  unload() keeps it for the restart."""
-        self.close()
-        shutil.rmtree(self.dir, ignore_errors=True)
 
 
-def gpu_list(cfg: dict) -> list[int]:
-    """The config's "gpu": one card (2), or several for a layer split ([0, 2] or "0,2"), numbered as nvidia-smi
-    numbers them; [] when it names none."""
-    g = cfg.get("gpu")
-    if g is None or g == "":
-        return []
-    items = g if isinstance(g, (list, tuple)) else str(g).split(",")
-    return [int(str(x).strip()) for x in items if str(x).strip() != ""]
 
 
-def effort_end_args(cfg: dict, exe: str, tok) -> list[str] | None:
-    """#458 (opt-in): the engine arguments for "effort_position": "end" - the id of "system" as --tail-role-token, so
-    the engine checkpoints in front of the trailing effort turn - or None when the config leaves it at the top (the
-    default) or the engine is too old for it (said once; the prompt stays the default one).  ValueError for a value
-    other than "start" / "end"."""
-    pos = cfg.get("effort_position", "start")
-    if pos not in ("start", "end"):
-        raise ValueError(f'"effort_position" must be "start" (the default) or "end", not {pos!r}')
-    if pos == "start":
-        return None
-    try:
-        with open(exe, "rb") as f:
-            known = b"--tail-role-token" in f.read()
-    except OSError:
-        known = False
-    role = tok.encode("system", parse_special=True)
-    if not known or len(role) != 1:
-        print("[hypercore] effort_position \"end\" needs engine 0.1.39 or newer (--tail-role-token): the reasoning "
-              "effort stays at the top of the prompt", flush=True)
-        return None
-    print("[hypercore] effort_position end: a request's non-default reasoning effort goes right before the answer, so "
-          "changing it keeps the cached conversation", flush=True)
-    return ["--tail-role-token", str(role[0])]
 
 
-def engine_silence_s(cfg: dict) -> float:
-    """#481: the config's "engine_silence_s" - seconds an engine may print nothing during a request before the server
-    ends it (default ENGINE_SILENCE_S; 0 = wait forever).  ValueError for anything but a number >= 0."""
-    v = cfg.get("engine_silence_s")
-    if v is None:
-        return ENGINE_SILENCE_S
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-        raise ValueError(f'"engine_silence_s" must be a number of seconds >= 0 (0 = no limit), not {v!r}')
-    return float(v)
 
 
-def layer_split_value(cfg: dict) -> str:
-    """#644: the config's "layer_split" as the engine's --layer-split value: "auto" (the default), or the FIRST LAYER of
-    each later GPU's share - one rising number per GPU after the first, e.g. "24,36,42" for 4 GPUs (layers 0-23 on the
-    first card, 24-35, 36-41, 42 to the end) - as a string or a JSON list ([24, 36, 42]).  ValueError with the format
-    and an example for anything else, such as per-card layer counts ("24,16,12,12")."""
-    v = cfg.get("layer_split")
-    if v is None or (isinstance(v, str) and v.strip().lower() in ("", "auto")):
-        return "auto"
-    n = len(gpu_list(cfg))
-    items = v if isinstance(v, (list, tuple)) else str(v).split(",") if isinstance(v, (str, int)) else None
-    vals = []
-    for x in items or []:
-        try:
-            if isinstance(x, bool) or isinstance(x, float):
-                raise ValueError
-            vals.append(int(str(x).strip()))
-        except ValueError:
-            vals = None
-            break
-    want = max(n - 1, 1)
-    example = ",".join(str(round(48 * (i + 1) / (want + 1))) for i in range(want))
-    hint = (f'"layer_split" is the first layer of each later GPU, one rising number per GPU after the first '
-            f'({want} for {n} GPUs), not a count of layers per card - e.g. "{example}" (or [{example.replace(",", ", ")}])'
-            f' for an even share of 48 layers, or "auto" (the default) to place them by each card\'s free VRAM')
-    if not vals:
-        raise ValueError(f"{hint}; got {v!r}")
-    if n > 1 and len(vals) != n - 1:
-        raise ValueError(f"{hint}; got {len(vals)} number(s) ({v!r}) for {n} GPUs")
-    if vals[0] < 2 or any(b <= a for a, b in zip(vals, vals[1:])):
-        raise ValueError(f"{hint}; got {v!r}, which does not rise from 2 or more")
-    return ",".join(str(x) for x in vals)
 
 
-def engine_args(cfg: dict) -> list[str]:
-    """The engine's arguments: the config's, and with several GPUs the layer split across them ("layer_split" in the
-    config: "auto" by default, or the first layer of each later GPU's share, e.g. "18" or "16,32"; see
-    layer_split_value)."""
-    args = list(cfg["args"])
-    if len(gpu_list(cfg)) > 1 and "--layer-split" not in args:
-        args += ["--layer-split", layer_split_value(cfg)]
-    # opt-in: an auto split runs on the first card alone when it holds every profiled expert and the KV
-    if len(gpu_list(cfg)) > 1 and cfg.get("split_skip_if_fits") and "--split-skip-if-fits" not in args:
-        args.append("--split-skip-if-fits")
-    # #533 (opt-in): "vram_elastic": true - the expert cache in segments, so POST /v1/vram can give VRAM back to other
-    # programs and take it back; "vram_segment_mib" sets the segment size (the engine's default: 512)
-    if cfg.get("vram_elastic") is True and "--vram-elastic" not in args:
-        args.append("--vram-elastic")
-        seg = cfg.get("vram_segment_mib")
-        if isinstance(seg, int) and not isinstance(seg, bool) and seg > 0 and "--vram-segment-mib" not in args:
-            args += ["--vram-segment-mib", str(seg)]
-    args += parallel_args(cfg, args)
-    return learned_profile_args(cfg, args)
 
 
-PARALLEL_MAX = 8      # the engine's batch window holds at most 8 rows (kVerifyMaxT); --batch-mtp waves more through it
 
 
-def parallel_args(cfg: dict, args: list[str]) -> list[str]:
-    """#465 (opt-in): "parallel": N in the config - up to N requests decode together in the engine's batch slots
-    (--batch N); more wait their turn.  1 or absent: one request at a time, as before.  A value the engine cannot use
-    is said and passed on: the engine warns and adjusts (recommend, never force)."""
-    if "--batch" in args or "--slots" in args:
-        return []
-    n = cfg.get("parallel")
-    if n is None or n is False:
-        return []
-    if isinstance(n, bool) or not isinstance(n, int):
-        print(f'[hypercore] "parallel" must be a whole number of requests (2..{PARALLEL_MAX}), not {n!r}: ignored',
-              flush=True)
-        return []
-    if n <= 1:
-        return []
-    if n > PARALLEL_MAX and "--batch-mtp" not in args and os.environ.get("HYPERCORE_BATCH_MTP", "0") in ("", "0"):
-        print(f'[hypercore] "parallel": {n} - the engine runs at most {PARALLEL_MAX} requests together; it will use '
-              f"{PARALLEL_MAX}", flush=True)
-    return ["--batch", str(n)]
 
 
-def profile_shape(path: str) -> tuple[int, int] | None:
-    """An expert profile's (layers, experts per layer), from its header (tools/make_profile.py's format), or None
-    when the file is missing, is not one or is shorter than the pairs its header promises."""
-    try:
-        with open(path, "rb") as f:
-            head = f.read(24)
-            size = os.fstat(f.fileno()).st_size
-    except OSError:
-        return None
-    if len(head) < 24 or head[:4] != b"STRP":
-        return None
-    _, nl, ne, _, n = struct.unpack("<5I", head[4:])
-    return (nl, ne) if size >= 24 + 4 * n else None
 
 
-def learned_profile_args(cfg: dict, args: list[str]) -> list[str]:
-    """#477 (opt-in): "expert_profile_save": "<path>" in the config has the engine (0.1.36+) save what its adaptive
-    tier learned there - on QUIT and every "expert_profile_save_every" minutes (10 by default, 0 = at QUIT only) -
-    and the next start begins from it instead of the config's --expert-profile, when it is a profile of the same
-    model (its header's layers and experts match); otherwise from the config's own, as before.  A relative path is
-    the engine's (the config's "cwd").  Without the key, the arguments are the config's, unchanged."""
-    save = cfg.get("expert_profile_save")
-    if not isinstance(save, str) or not save.strip() or "--expert-profile-save" in args:
-        return args
-    args = args + ["--expert-profile-save", save]
-    every = cfg.get("expert_profile_save_every")
-    if isinstance(every, (int, float)) and not isinstance(every, bool) and every >= 0:
-        args += ["--expert-profile-save-every", str(every)]
-    if "--expert-profile" in args[:-1]:
-        i = args.index("--expert-profile") + 1
-        here = cfg.get("cwd") or "."
-        learned = profile_shape(save if os.path.isabs(save) else os.path.join(here, save))
-        base = profile_shape(args[i] if os.path.isabs(args[i]) else os.path.join(here, args[i]))
-        if learned is not None and learned == base:
-            args[i] = save
-    return args
 
 
-def hip_visible(cfg: dict) -> list[int]:
-    """AMD: the devices the engine should see, as the HIP runtime numbers them (HIP_VISIBLE_DEVICES).
-
-    On Linux setup's KFD order is HIP's order, so the config's "gpu" is it.  On Windows setup finds the cards in the
-    display-adapter order, and an integrated Radeon that HIP also enumerates takes ordinal 0 and pushes the discrete
-    card to 1 (#325): setup records the ordinal `hypercore-device --list-devices` gave the card as "hip_ordinal", which
-    wins for a one-card config.  Without it (a config from before), the config's "gpu"."""
-    ordinal = cfg.get("hip_ordinal")
-    if ordinal is not None and str(ordinal).strip() != "" and len(gpu_list(cfg)) <= 1:
-        try:
-            return [int(str(ordinal).strip())]
-        except ValueError:
-            pass
-    return gpu_list(cfg)
 
 
-def child_env(cfg: dict) -> dict:
-    """The engine's environment: the CUDA libraries setup installed (pip's nvidia packages, or the toolkit that
-    compiled it) first on the library search path."""
-    env = dict(os.environ)
-    if hip_visible(cfg) and cfg.get("backend") == "hip":   # AMD: numbered as HIP numbers them (hip_visible)
-        env["HIP_VISIBLE_DEVICES"] = ",".join(str(i) for i in hip_visible(cfg))
-    elif gpu_list(cfg):                              # issue #51: the GPU(s) to run on, numbered as nvidia-smi does; CUDA's
-        env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"      # own default order (fastest first) can number the cards otherwise
-        env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in gpu_list(cfg))
-    for k, v in (cfg.get("env") or {}).items():      # engine settings the config carries (AMD: the GEMM tuning table)
-        env[str(k)] = str(v)
-    dirs = [d for d in cfg.get("lib_dirs") or [] if Path(d).is_dir()]
-    if dirs:
-        var = "PATH" if os.name == "nt" else "LD_LIBRARY_PATH"
-        env[var] = os.pathsep.join(dirs + ([env[var]] if env.get(var) else []))
-    return env
 
 
-def vision_env(cfg: dict, env: dict) -> dict:
-    """The image encoder's environment: the engine's, unless the config's vision section names its own "cuda_device"
-    (numbered like nvidia-smi) - then the encoder runs on that card alone, so a spare GPU can hold it while the engine
-    keeps all of its own cards' VRAM (#408, Efs-O).  Without it, nothing changes.
-
-    GGML_NO_BACKTRACE: llama.cpp's crash reporter forks gdb and writes its stack trace on stdout, which is the pipe
-    _start() reads - so a failed start is reported as "[New LWP 12345]" instead of the reason.  The encoder's stderr
-    (the assert, the cudaMalloc that did not fit) still goes to the log."""
-    env = dict(env)
-    env.setdefault("GGML_NO_BACKTRACE", "1")
-    dev = (cfg.get("vision") or {}).get("cuda_device")
-    if dev is None:
-        return env
-    if cfg.get("backend") == "hip":
-        env["HIP_VISIBLE_DEVICES"] = str(dev)
-    else:
-        env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        env["CUDA_VISIBLE_DEVICES"] = str(dev)
-    return env
 
 
-class ByteTokenizer:
-    """Tiny stand-in tokenizer for tests without the pack: one id per UTF-8 byte, specials as ids >= 256."""
-    SPECIALS = ["<|im_start|>", "<|im_end|>", "<|endoftext|>", "<|vision_start|>", "<|image_pad|>", "<|vision_end|>"]
-
-    ALWAYS = ()                                     # specials matched without parse_special (type 4, as <think>)
-
-    @property
-    def control_tokens(self):
-        return [s for s in self.SPECIALS if s not in self.ALWAYS]
-
-    def encode(self, text, parse_special=False, plain=()):
-        out, i = [], 0
-        while i < len(text):
-            for k, s in enumerate(self.SPECIALS):
-                if (parse_special or s in self.ALWAYS) and text.startswith(s, i) and not any(
-                        a <= i < b for a, b in plain):
-                    out.append(256 + k)
-                    i += len(s)
-                    break
-            else:
-                out.extend(text[i].encode("utf-8"))
-                i += 1
-        return out
-
-    def decode(self, ids, errors="replace"):
-        raw = bytearray()
-        for t in ids:
-            raw += self.SPECIALS[t - 256].encode() if t >= 256 else bytes([t])
-        return raw.decode("utf-8", errors=errors)
 
 
 # ------------------------------------------------------------------------------------------------ core
-class Detokenizer:
-    """Incremental decode: each token's bytes go through an incremental UTF-8 decoder, which emits the complete
-    characters and holds a multi-byte character split across tokens until it is complete (invalid bytes become
-    U+FFFD, as a whole decode with errors="replace" makes them).  Constant time per token - the old re-decode of
-    every generated id cost 2 ms per token after 8K tokens and 4 ms after 16K (perf-review F-1).  A tokenizer
-    without `token_bytes` (the tests' byte tokenizer) keeps the re-decode."""
-
-    def __init__(self, tok):
-        self.tok, self.ids, self.sent = tok, [], 0
-        self.inc = codecs.getincrementaldecoder("utf-8")(errors="replace") if hasattr(tok, "token_bytes") else None
-
-    def pending(self) -> bool:
-        """A character is split across the tokens so far: its first bytes are held."""
-        if self.inc is not None:
-            return bool(self.inc.getstate()[0])
-        return self.tok.decode(self.ids).endswith("\ufffd")
-
-    def push(self, t: int) -> str:
-        if self.inc is not None:
-            return self.inc.decode(self.tok.token_bytes(t))
-        self.ids.append(t)
-        text = self.tok.decode(self.ids)
-        if text.endswith("�"):
-            return ""
-        delta, self.sent = text[self.sent:], len(text)
-        return delta
 
 
-OPENAI_MAX_STOP = 4                                  # OpenAI's limit on `stop`
 
 
-def stop_strings(req: dict) -> list[str]:
-    """The request's stop strings: OpenAI's `stop` (a string or a list of up to 4) or Anthropic's `stop_sequences`
-    (a list).  Empty strings are left out.  A bad value is a ValueError, so a 400 before anything is generated."""
-    req = req or {}
-    if req.get("stop") is not None:
-        stop = req["stop"]
-        stop = [stop] if isinstance(stop, str) else stop
-        if not isinstance(stop, list) or not all(isinstance(x, str) for x in stop):
-            raise ValueError("stop must be a string or a list of strings")
-        if len(stop) > OPENAI_MAX_STOP:
-            raise ValueError(f"stop takes at most {OPENAI_MAX_STOP} strings")
-    elif req.get("stop_sequences") is not None:
-        stop = req["stop_sequences"]
-        if not isinstance(stop, list) or not all(isinstance(x, str) for x in stop):
-            raise ValueError("stop_sequences must be a list of strings")
-    else:
-        return []
-    return [x for x in stop if x]
 
 
-class StopMatcher:
-    """Cuts the answer's text at the first stop string.  Text that could still be the start of a stop string is held
-    back (only that tail, never more), so a stop string split across tokens or chunks is still found and never sent."""
-
-    def __init__(self, stops: list[str]):
-        self.stops, self.held, self.hit = stops, "", None
-
-    def push(self, text: str) -> str:
-        """-> the text that is safe to send now; after a match, self.hit is the stop string and nothing more comes."""
-        if self.hit is not None:
-            return ""
-        buf = self.held + text
-        first = None
-        for s in self.stops:
-            i = buf.find(s)
-            if i >= 0 and (first is None or i < first[0]):
-                first = (i, s)
-        if first is not None:
-            self.held, self.hit = "", first[1]
-            return buf[:first[0]]
-        keep = 0                                      # the longest end of buf that a stop string starts with
-        for s in self.stops:
-            for k in range(min(len(s) - 1, len(buf)), keep, -1):
-                if buf.endswith(s[:k]):
-                    keep = k
-                    break
-        self.held = buf[len(buf) - keep:] if keep else ""
-        return buf[:len(buf) - keep]
-
-    def flush(self) -> str:
-        held, self.held = self.held, ""
-        return held
 
 
 
@@ -2906,65 +2082,12 @@ def _debug_req(api, req, messages, tools, max_new, thinking, prompt_tokens):
 # model whether every task in the request is done. A bare confirmation ends the turn; anything else - a
 # "no", or the model ignoring the question and carrying on - is the turn still open, so the work
 # continues and the question is asked again, up to "turn_tail_checks" times.
-TAIL_CHECK_PROMPT = ('Before this turn ends, check your work against the request: did you complete every '
-                     'task it asked for? If everything is done, reply with the single word "done" and '
-                     'nothing else. If anything is still outstanding, do that work now.')
-TAIL_CHECK_MAX = 3              # how many times one turn may be asked, at most
-TAIL_CONFIRM_CHARS = 120        # a confirmation is a word or two; longer text is the model working on
-TAIL_OUTSTANDING = ("not yet", "still need", "still have", "haven't", "have not", "incomplete",
-                    "unfinished", "remaining", "i need", "i'll", "i will", "are outstanding",
-                    "is outstanding", "pending", "not done", "next step", "continue working", "to do")
-TAIL_CONFIRM = ("done", "complete", "completed", "finished", "everything is done", "all tasks done",
-                "all tasks complete", "no outstanding", "nothing outstanding", "nothing left",
-                "nothing more", "yes")
 
 
-def tail_normalize(text: str) -> str:
-    """A reply as words: lower case, punctuation and runs of space gone."""
-    return " ".join((text or "").lower().replace(".", " ").replace(",", " ").replace("!", " ").split())
 
 
-def tail_is_done(text: str) -> bool:
-    """A reply to the turn-tail check: is the work finished?
-
-    A turn is still open when the reply says so (an outstanding-work word), when it is longer than a
-    word or two (a model carrying on is not confirming), or when there is no reply at all - ignoring
-    the question is not an answer.
-    """
-    t = tail_normalize(text)
-    if not t or len(t) > TAIL_CONFIRM_CHARS:
-        return False
-    if any(w in t for w in TAIL_OUTSTANDING):
-        return False
-    return any(w in t for w in TAIL_CONFIRM)
 
 
-class TailHold:
-    """A check round's reply, held until it is known whether the work is finished.
-
-    A confirmation is never shown to the client; everything else is the model doing its remaining work
-    and is streamed as soon as it is clear. The same shape as the stop-string matcher in Service.run:
-    text is emitted only when it cannot still be a confirmation.
-    """
-
-    def __init__(self):
-        self.held, self.open = "", True
-
-    def push(self, text: str) -> str:
-        if not self.open:
-            return text
-        self.held += text
-        t = tail_normalize(self.held)
-        if not t:
-            return ""                       # only whitespace so far: nothing to say yet
-        if len(t) > TAIL_CONFIRM_CHARS or any(w in t for w in TAIL_OUTSTANDING):
-            out, self.held, self.open = self.held, "", False
-            return out
-        return ""
-
-    def flush(self) -> str:
-        out, self.held = self.held, ""
-        return out
 
 
 # ------------------------------------------------------------------------------------------------ MCP tool loop
@@ -3266,260 +2389,21 @@ def with_tail_check(svc: Service, gen, messages, tools, kw, max_new, sampling, c
 # prompt.  A PP that close to the end says the prompt is read.  It matters because a prompt shorter than one `--prefill`
 # chunk sends exactly one PP, that one: a client would see a bar that appears already full.  Such a line is dropped, and
 # the answer's first token ends the progress for the client anyway.
-PP_DONE_TAIL = 64
 
 
-def prompt_progress(svc: Service):
-    """The last PP line as llama.cpp's `prompt_progress`, so a client written for llama.cpp reads both servers: the
-    same four fields, `time_ms` elapsed since prompt reading started, and `processed` counting from token 0 so that a
-    client takes the reused prefix out with `cache` (llama.cpp's rule: the timed progress is
-    `(processed-cache)/(total-cache)`).  None when there is nothing to say: no PP yet, or the line that says the prompt
-    is read.  An engine too old to print RESUME gives `cache` 0, which only makes a reused prefix count as work."""
-    engine = svc.engine
-    if getattr(engine, "batch", 0):      # --batch: the engine's progress is one global line, not this request's
-        return None
-    progress = getattr(engine, "progress", None)
-    if not progress:
-        return None
-    read, total = progress
-    if total <= 0 or total - read <= PP_DONE_TAIL:
-        return None
-    return {"total": int(total), "cache": int(getattr(engine, "reused", 0) or 0), "processed": int(read),
-            "time_ms": int(getattr(engine, "progress_ms", 0) or 0)}
 
 
-def openai_chunks(svc: Service, req: dict, ids, thinking, tools, max_new, cancel, run=None, force=None):
-    """`run`: the events to send instead of Service.run's (run_with_mcp); its ("mcp", {...}) items become chunks with
-    an empty delta and a `hypercore_mcp` field, which only the web app reads.  `force`: see Service.run."""
-    cid, created = "chatcmpl-" + uuid.uuid4().hex[:24], int(time.time())
-    model = svc.model_for(req)
-    # llama.cpp's flag, and its default: a client that wants prompt progress asks for it, and nothing changes for one
-    # that does not.  HyperCore already sends a keep-alive comment on every PP line, so this only fills that line in.
-    want_progress = bool(req.get("return_progress"))
-
-    def chunk(delta, finish=None):
-        return {"id": cid, "object": "chat.completion.chunk", "created": created, "model": model,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
-
-    yield chunk({"role": "assistant", "content": ""})
-    calls = 0
-    streamed = {}                                  # tool call id -> index, for calls sent piece by piece
-    finished = set()                               # ... and the ones whose final tool_call came (#211)
-    for kind, x in run if run is not None else svc.run(ids, thinking, tools, max_new, req, cancel, force=force):
-        if kind == "ping":
-            # a PP line: the prompt is being read and there is nothing to say yet.  It used to be only the SSE comment;
-            # now it carries the progress when the client asked, and stays the comment when there is nothing to report.
-            pp = prompt_progress(svc) if want_progress else None
-            yield None if pp is None else {**chunk({}), "prompt_progress": pp}
-        elif kind == "mcp":
-            c = chunk({})
-            c["hypercore_mcp"] = x
-            yield c
-        elif kind == "event":
-            ev: Event = x
-            if ev.kind == "reasoning" and ev.text:
-                yield chunk({"reasoning_content": ev.text})
-            elif ev.kind == "content" and ev.text:
-                yield chunk({"content": ev.text})
-            elif ev.kind == "tool_start":
-                streamed[ev.call.id] = calls
-                calls += 1
-                yield chunk({"tool_calls": [{"index": streamed[ev.call.id], "id": ev.call.id, "type": "function",
-                                             "function": {"name": ev.call.name, "arguments": ""}}]})
-            elif ev.kind == "tool_args":
-                yield chunk({"tool_calls": [{"index": streamed[ev.call.id], "function": {"arguments": ev.text}}]})
-            elif ev.kind == "tool_call" and ev.call.id in streamed:
-                finished.add(ev.call.id)
-            elif ev.kind == "tool_call":
-                yield chunk({"tool_calls": [{"index": calls, "id": ev.call.id, "type": "function",
-                                             "function": {"name": ev.call.name,
-                                                          "arguments": json.dumps(ev.call.arguments, ensure_ascii=False)}}]})
-                calls += 1
-        else:
-            # a streamed call without its final tool_call is one the output ended inside: not "tool_calls" (#211)
-            whole = calls and streamed.keys() <= finished
-            finish = "tool_calls" if whole and x["finish"] == "stop" else {"cancel": "stop"}.get(x["finish"], x["finish"])
-            last = chunk({}, finish)
-            pt = x.get("prompt_tokens", len(ids))     # after MCP rounds: the last round's prompt
-            last["usage"] = {"prompt_tokens": pt, "completion_tokens": x["completion_tokens"],
-                             "total_tokens": pt + x["completion_tokens"],
-                             # the part of the prompt the conversation cache already held (OpenAI's field)
-                             "prompt_tokens_details": {"cached_tokens": x.get("reused") or 0}}
-            if x.get("timings"):
-                last["timings"] = x["timings"]          # llama.cpp's field: the speed its clients show
-            yield last
 
 
-def _is_json(text: str) -> bool:
-    try:
-        json.loads(text)
-        return True
-    except ValueError:
-        return False
 
 
-def openai_collect(chunks) -> dict:
-    content, reasoning, by_index, last, mcp = [], [], {}, None, []
-    for c in chunks:
-        if c is None:                              # a heartbeat
-            continue
-        if c.get("hypercore_mcp"):
-            mcp.append(c["hypercore_mcp"])
-        d = c["choices"][0]["delta"]
-        content.append(d.get("content") or "")
-        reasoning.append(d.get("reasoning_content") or "")
-        for tc in d.get("tool_calls") or []:       # streamed calls arrive in pieces: merge them by index
-            cur = by_index.setdefault(tc.get("index", len(by_index)), {"id": None, "type": "function",
-                                                                        "function": {"name": "", "arguments": ""}})
-            cur["id"] = tc.get("id") or cur["id"]
-            fn = tc.get("function") or {}
-            cur["function"]["name"] += fn.get("name") or ""
-            cur["function"]["arguments"] += fn.get("arguments") or ""
-        last = c
-    calls = [by_index[i] for i in sorted(by_index)]
-    if last["choices"][0]["finish_reason"] != "tool_calls":
-        calls = [c for c in calls if _is_json(c["function"]["arguments"])]   # a call the output ended inside (#211)
-    msg = {"role": "assistant", "content": "".join(content) or None}
-    if "".join(reasoning):
-        msg["reasoning_content"] = "".join(reasoning)
-    if calls:
-        msg["tool_calls"] = calls
-    if mcp:
-        msg["hypercore_mcp"] = mcp
-    out = {"id": last["id"], "object": "chat.completion", "created": last["created"], "model": last["model"],
-           "choices": [{"index": 0, "message": msg, "finish_reason": last["choices"][0]["finish_reason"]}],
-           "usage": last["usage"]}
-    if last.get("timings"):
-        out["timings"] = last["timings"]
-    return out
 
 
-def structured_chunks(chunks, validator):
-    """Buffer structured streams so a client never receives unvalidated content."""
-    buffered = []
-    heartbeat = time.monotonic()
-    try:
-        for chunk in chunks:
-            progress = chunk is not None and "prompt_progress" in chunk
-            if chunk is not None and not progress:
-                buffered.append(chunk)      # a progress chunk carries no content: there is nothing in it to validate
-            if chunk is None or progress or time.monotonic() - heartbeat >= 1:
-                heartbeat = time.monotonic()
-                yield chunk if progress else None
-        result = openai_collect(buffered)
-        choice = result["choices"][0]
-        content = validated_json(choice["message"]["content"], validator, choice["finish_reason"])
-        yield buffered[0]
-        delta = {"content": content}
-        if choice["message"].get("reasoning_content"):
-            delta["reasoning_content"] = choice["message"]["reasoning_content"]
-        yield {**buffered[0], "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
-        yield buffered[-1]
-    finally:
-        chunks.close()
 
 
 # ------------------------------------------------------------------------------------------------ Anthropic
-def anthropic_events(svc: Service, req: dict, ids, thinking, tools, max_new, cancel, force=None, run=None):
-    mid = "msg_" + uuid.uuid4().hex[:24]
-    yield "message_start", {"type": "message_start", "message": {
-        "id": mid, "type": "message", "role": "assistant", "model": svc.model_for(req), "content": [],
-        "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": len(ids), "output_tokens": 0}}}
-    index, open_kind, used_tool = -1, None, False
-
-    def close():
-        return ("content_block_stop", {"type": "content_block_stop", "index": index})
-
-    streamed, finished = set(), set()              # calls sent piece by piece; those whose final tool_call came (#211)
-    for kind, x in run if run is not None else svc.run(ids, thinking, tools, max_new, req, cancel, force=force):
-        if kind == "ping":
-            yield None
-            continue
-        elif kind == "mcp":
-            continue
-        if kind == "event":
-            ev: Event = x
-            if ev.kind == "tool_args":
-                yield "content_block_delta", {"type": "content_block_delta", "index": index,
-                                              "delta": {"type": "input_json_delta", "partial_json": ev.text}}
-                continue
-            if ev.kind == "tool_call" and ev.call.id in streamed:
-                finished.add(ev.call.id)
-                continue
-            want = {"reasoning": "thinking", "content": "text", "tool_call": "tool_use", "tool_start": "tool_use"}[ev.kind]
-            if ev.kind not in ("tool_call", "tool_start") and not ev.text:
-                continue
-            if ev.kind == "tool_start":
-                streamed.add(ev.call.id)
-                used_tool = True
-            if open_kind != want or want == "tool_use":
-                if open_kind is not None:
-                    yield close()
-                index += 1
-                open_kind = want
-                block = {"thinking": {"type": "thinking", "thinking": "", "signature": ""},
-                         "text": {"type": "text", "text": ""},
-                         "tool_use": {"type": "tool_use", "id": ev.call.id if ev.call else "", "name":
-                                      ev.call.name if ev.call else "", "input": {}}}[want]
-                yield "content_block_start", {"type": "content_block_start", "index": index, "content_block": block}
-            if want == "thinking":
-                yield "content_block_delta", {"type": "content_block_delta", "index": index,
-                                              "delta": {"type": "thinking_delta", "thinking": ev.text}}
-            elif want == "text":
-                yield "content_block_delta", {"type": "content_block_delta", "index": index,
-                                              "delta": {"type": "text_delta", "text": ev.text}}
-            elif ev.kind == "tool_start":
-                pass                                # its input follows as tool_args pieces
-            else:
-                used_tool = True
-                yield "content_block_delta", {"type": "content_block_delta", "index": index, "delta": {
-                    "type": "input_json_delta", "partial_json": json.dumps(ev.call.arguments, ensure_ascii=False)}}
-        else:
-            if open_kind is not None:
-                yield close()
-            stop = "stop_sequence" if x.get("stop_sequence") is not None else \
-                "tool_use" if used_tool and streamed <= finished and x["finish"] == "stop" else \
-                {"stop": "end_turn", "length": "max_tokens", "cancel": "end_turn"}[x["finish"]]
-            # the final counts, Anthropic's way: input_tokens leaves out what the conversation cache already held,
-            # which is cache_read_input_tokens (message_start could only say the whole prompt)
-            reused = min(x.get("reused") or 0, len(ids))
-            yield "message_delta", {"type": "message_delta", "delta": {"stop_reason": stop,
-                                                                       "stop_sequence": x.get("stop_sequence")},
-                                    "usage": {"input_tokens": len(ids) - reused, "cache_read_input_tokens": reused,
-                                              "output_tokens": x["completion_tokens"]}}
-            yield "message_stop", {"type": "message_stop"}
 
 
-def anthropic_collect(events) -> dict:
-    msg, blocks = None, []
-    for item in events:
-        if item is None:                           # a heartbeat
-            continue
-        name, e = item
-        if name == "message_start":
-            msg = e["message"]
-        elif name == "content_block_start":
-            blocks.append(dict(e["content_block"]))
-        elif name == "content_block_delta":
-            d, b = e["delta"], blocks[-1]
-            if d["type"] == "text_delta":
-                b["text"] += d["text"]
-            elif d["type"] == "thinking_delta":
-                b["thinking"] += d["thinking"]
-            else:                                  # input_json_delta pieces: parsed when complete
-                b["_json"] = b.get("_json", "") + d["partial_json"]
-        elif name == "content_block_stop" and blocks and "_json" in blocks[-1]:
-            b = blocks[-1]
-            try:
-                b["input"] = json.loads(b.pop("_json") or "{}")
-            except ValueError:                     # a call the output ended inside (#211): it has no input to give
-                blocks.pop()
-        elif name == "message_delta":
-            msg["stop_reason"] = e["delta"]["stop_reason"]
-            msg["stop_sequence"] = e["delta"].get("stop_sequence")
-            msg["usage"].update(e["usage"])
-    msg["content"] = blocks
-    return msg
 
 
 # ------------------------------------------------------------------------------------------------ HTTP
@@ -4121,13 +3005,15 @@ def make_handler(svc: Service):
                     if not release:
                         self._json(400, {"error": {"message": "no release found"}})
                         return
-                    result = build_api.JOB.fetch_prebuilt(release, req.get("quant"))
+                    result = build_api.JOB.fetch_prebuilt(release, req.get("quant"),
+                                                          req.get("choices"))
                     self._json(200 if result.get("ok") else 500, result)
                     return
                 if path == "/build/start":
                     self._json(200, build_api.JOB.start(str(req.get("tag") or "main"),
                                                        req.get("options") or {},
-                                                       req.get("quant")))
+                                                       req.get("quant"),
+                                                       req.get("choices")))
                     return
                 if path == "/versions/select":
                     # start one of the stored quant builds: place its binaries, point
@@ -4335,8 +3221,8 @@ def make_handler(svc: Service):
                     if getattr(svc, "mcp", None) is not None:
                         try:
                             svc.mcp.start()             # a hub that will not come back is not a failed start
-                        except Exception:
-                            pass
+                        except Exception as exc:  # noqa: BLE001 - the chat runs without the hub
+                            logger.warning("mcp hub did not restart with the engine: %s", exc)
                     svc.engine_stopped = False
                     self._json(200, {"status": "running", "model": svc.model,
                                      "note": "the engine is loading: the first answer takes a minute or two"})
@@ -5066,196 +3952,16 @@ def origins_of(value, key: str, wildcard: bool) -> list[str]:
 SHARED_KEYS = ("reasoning_effort", "temperature", "top_p", "top_k", "seed", "max_tokens", "experimental_speed_projection")
 
 
-def clean_shared_defaults(d) -> dict:
-    """The Chat settings other apps get (POST /settings): only known keys, each checked; ValueError names a bad one."""
-    if d is None:
-        return {}
-    if not isinstance(d, dict):
-        raise ValueError("defaults must be an object")
-    out = {}
-    for key, value in d.items():
-        if value is None or value == "":
-            continue
-        number = isinstance(value, (int, float)) and not isinstance(value, bool)
-        if key == "reasoning_effort":
-            if value not in ("none", "low", "medium", "high"):
-                raise ValueError("reasoning_effort: none, low, medium or high")
-        elif key == "temperature":
-            if not number or not 0 <= value <= 2:
-                raise ValueError("temperature: 0..2")
-        elif key == "top_p":
-            if not number or not 0 < value <= 1:
-                raise ValueError("top_p: 0 < top_p <= 1")
-        elif key == "top_k":
-            if not number or value != int(value) or not 1 <= value <= 64:
-                raise ValueError("top_k: an integer 1..64")
-            value = int(value)
-        elif key in ("seed", "max_tokens"):
-            if not number or value != int(value) or value <= 0:
-                raise ValueError(f"{key}: a positive integer")
-            value = int(value)
-        elif key == "experimental_speed_projection":
-            if not isinstance(value, bool):
-                raise ValueError("experimental_speed_projection: true or false")
-        else:
-            raise ValueError(f"unknown setting {key!r}")
-        out[key] = float(value) if key in ("temperature", "top_p") else value
-    return out
 
 
-def sampling_defaults_from_config(cfg: dict) -> dict:
-    """The run config's optional `sampling` block: defaults for the sampling fields a request leaves out, so
-    a plain client gets configured sampling instead of greedy.  Supported: temperature, top_p, top_k, min_p,
-    presence_penalty, repetition_penalty, frequency_penalty, penalty_last_n, seed.  The request's own fields
-    always win - an explicit temperature=0 still means greedy, a field set to null falls back to the default.
-    A bad value refuses to start the server (a typo'd config should not quietly change sampling); unknown keys
-    are named at startup and ignored."""
-    out = {}
-    for key, value in (cfg.get("sampling") or {}).items():
-        if value is None:
-            continue
-        number = isinstance(value, (int, float)) and not isinstance(value, bool)
-        if key == "temperature":
-            if not number or value < 0:
-                raise SystemExit(f"[hypercore] config sampling.temperature={value!r}: expected a number >= 0 (0 = greedy)")
-            out[key] = float(value)
-        elif key == "top_p":
-            if not number or not 0 < value <= 1:
-                raise SystemExit(f"[hypercore] config sampling.top_p={value!r}: expected 0 < top_p <= 1")
-            out[key] = float(value)
-        elif key == "min_p":
-            if not number or not 0 <= value <= 1:
-                raise SystemExit(f"[hypercore] config sampling.min_p={value!r}: expected 0 <= min_p <= 1")
-            out[key] = float(value)
-        elif key == "top_k":
-            if not number or value != int(value) or not 1 <= value <= 64:
-                raise SystemExit(f"[hypercore] config sampling.top_k={value!r}: the sampled path takes an integer 1..64")
-            out[key] = int(value)
-        elif key == "presence_penalty":
-            if not number or value < 0:
-                raise SystemExit(f"[hypercore] config sampling.presence_penalty={value!r}: expected a number >= 0")
-            out[key] = float(value)
-        elif key == "frequency_penalty":
-            if not number or value < 0:
-                raise SystemExit(f"[hypercore] config sampling.frequency_penalty={value!r}: expected a number >= 0")
-            out[key] = float(value)
-        elif key == "repetition_penalty":
-            if not number or value <= 0:
-                raise SystemExit(f"[hypercore] config sampling.repetition_penalty={value!r}: expected a number > 0 (1 = off)")
-            out[key] = float(value)
-        elif key == "penalty_last_n":
-            if not number or value != int(value) or value < 0:
-                raise SystemExit(f"[hypercore] config sampling.penalty_last_n={value!r}: expected a non-negative integer")
-            out[key] = int(value)
-        elif key == "seed":
-            if not number or value != int(value) or value <= 0:
-                raise SystemExit(f"[hypercore] config sampling.seed={value!r}: expected a positive integer")
-            out[key] = int(value)
-        elif key == "experimental_speed_projection":
-            if not isinstance(value, bool):
-                raise SystemExit(f"[hypercore] config sampling.experimental_speed_projection={value!r}: expected true or "
-                                 "false (the default for requests that leave it out, when the engine has the vector)")
-            out[key] = value
-        else:
-            print(f"[hypercore] config sampling.{key}={value!r}: unknown key, ignored", flush=True)
-    return out
 
 
-MAX_CONFIG_BYTES = 10 * 1024 * 1024   # the ceiling hypercore_engine_init also enforces
 
 
-def verbatim_object_slice(text: str, key: str) -> str | None:
-    """The exact characters of `"key": { ... }` in the original document.
-
-    Braces are matched on the raw text, so indentation, key order and spacing survive.
-    Returns None when the key is absent or the object is malformed.
-    """
-    match = re.search(r'"' + re.escape(key) + r'"\s*:\s*\{', text)
-    if not match:
-        return None
-    start = match.end() - 1
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    return None
 
 
-def resolve_configuration_payload(config_input: str | None) -> str:
-    """Return the configuration text the worker will receive, unmutated.
-
-    Inline JSON is forwarded verbatim: whitespace, indentation and key order are kept, so
-    a deployment that hashes its config still matches the payload the worker parses.
-    A path is read here, once - the worker is never handed a path. The 10 MB ceiling is
-    checked before anything is buffered, and an empty file is an error rather than a
-    silent fall back to defaults.
-
-    Raises ValueError for an empty file, an oversized payload or a non-object document,
-    and FileNotFoundError when the path cannot be opened.
-    """
-    if not config_input:
-        return ""
-    if not config_input.strip():
-        return ""                      # a blank argument is no configuration, not a bad path
-
-    payload_bytes = len(config_input.encode("utf-8"))
-    if payload_bytes > MAX_CONFIG_BYTES:
-        raise ValueError(
-            f"configuration is {payload_bytes} bytes; the ceiling is {MAX_CONFIG_BYTES}"
-        )
-
-    if is_inline_config(config_input):
-        json.loads(config_input)          # validate, but never re-serialise
-        return config_input               # verbatim
-
-    path = Path(config_input.strip())
-    try:
-        size = path.stat().st_size
-    except OSError as e:
-        raise FileNotFoundError(f"configuration file not readable: {path} ({e})") from e
-    if size == 0:
-        raise ValueError(
-            f"configuration file {path} is empty; refusing to run on hidden defaults"
-        )
-    if size > MAX_CONFIG_BYTES:
-        raise ValueError(
-            f"configuration file {path} is {size} bytes; the ceiling is {MAX_CONFIG_BYTES}"
-        )
-
-    text = path.read_text(encoding="utf-8-sig")   # Notepad adds a BOM
-    if not is_inline_config(text):
-        raise ValueError(f"configuration file {path} does not contain a JSON object")
-    return text
 
 
-def parse_config_object(text: str) -> dict:
-    """Validate a configuration payload as an object, without rewriting it."""
-    if not text:
-        return {}
-    try:
-        cfg = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"configuration is not valid JSON: {e}") from e
-    if not isinstance(cfg, dict):
-        raise ValueError("configuration must be a JSON object")
-    return cfg
 
 
 def worker_binary_path(root: Path = ROOT) -> str:
@@ -5324,9 +4030,6 @@ def hypercore_worker_config(cfg: dict, raw_config: str = "") -> str:
 
     return json.dumps(out)
 
-def is_inline_config(raw: str) -> bool:
-    """The same rule the C boundary uses: the first non-whitespace character decides."""
-    return bool(raw) and raw.strip().startswith("{")
 
 
 def run_configs() -> list[Path]:
@@ -6157,3 +4860,23 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# Re-exports: serve.server.Vision, serve.server.MockEngine and the rest are used by the tests
+# and by callers that import the server module. `__all__` keeps the lint gate from calling
+# these imports dead.
+__all__ = [
+    "Engine", "EngineDied", "EngineSilent", "EngineStarting", "EngineStopped", "EngineStuck",
+    "GpuBusy", "IM_END", "MockEngine", "ModelBusy", "SessionRefused", "SlotRefused",
+    "network_path", "popen", "start_failure_hint", "start_log_tail", "unload_wait",
+    "ConvCacheLog", "btrace", "conversation_cache_view", "echo_requests", "expert_config_line",
+    "experts_loading_words", "narrate_start", "narrate_worker_start", "worker_start_words",
+    "Vision", "vision_start_reason",
+    "clean_shared_defaults", "is_inline_config", "parse_config_object", "resolve_configuration_payload",
+    "sampling_defaults_from_config", "verbatim_object_slice",
+    "ByteTokenizer", "Detokenizer", "StopMatcher", "TailHold", "TAIL_CHECK_MAX", "TAIL_CHECK_PROMPT",
+    "stop_strings", "tail_is_done", "tail_normalize",
+    "child_env", "engine_args", "engine_silence_s", "effort_end_args", "gpu_list", "hip_visible",
+    "learned_profile_args", "layer_split_value", "parallel_args", "profile_shape", "vision_env",
+    "anthropic_collect", "anthropic_events", "openai_chunks", "openai_collect", "prompt_progress",
+    "structured_chunks",
+]
