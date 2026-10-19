@@ -1,0 +1,27 @@
+# strata-chat-2026-10-09-16-17.md
+
+2026-10-09 · 652 KB · 5 requests · topics: deployment-permissions, hardware-environment, memory-vram
+
+## What was asked
+- are you still keeping a tool state file
+- on the assist tab of the webUI the models thought are not in the thought window, they appear in the response window. The thought window is present, but it not populated.
+- put a collapse button like the thoughts box that collapses the assist tab->models config/select box
+- in the assist tab, the probed results should not show any model that the test flagged with "the endpoint does not serve it (HTTP 404)"
+- how would you rate yourself on coding a cuda kernel on the level of the Strata engine?
+
+## What came of it
+- New harness `serve/web/test_assist_thought_panel.js` (a small DOM stand-in; it reads `updateAssistant`, `transcriptOf`, `bindTranscript` and the actual `bindTranscript(...)` wiring lines out of `app.js`, so it fails when the app changes): 5 cases, 5 pass, exit 0 — panel opens and shows the reasoning in both transcripts, copy reads the right array, a missing container is a no-op.
+- Negative control: the same harness against `app.js` with `bindTranscript($("assist-chat"));` removed fails on `#assist-chat is not bound` and `opening the panel left it empty in #assist-chat` — so the test is not vacuous.
+- State file `.mcp_test_state.json` updated: loop 16, this item added to `done`/`verified`, `next_step` = nothing pending in this thread.
+- The new cases run the real `paintAssistTop`/`foldAssistTop`/`wireAssistTop` source out of `app.js` against the stand-in DOM: the summary names the selected model and count; a first visit stays open; closing is stored and restored on reload; a programmatic open does not overwrite the user's choice; an older page without the panel does not throw.
+- Negative control: deleting `wireAssistTop();` from `app.js` makes 5 of the 10 fail — the harness is sensitive to the wiring, not just to the strings.
+- I filtered them in the renderer rather than in the probe, so the server still records them (the existing `test_assist.py` cases assert `over_limit` contains them, and the file is the debugging record).
+- `serve/web/app.js` — `renderAssistProbe` The `group("Not served by this endpoint", unavailable, …)` block is gone; a single line replaces it: > `56 model(s) the endpoint does not serve are not listed: the chat call answers 404 for them, so there is nothing to measure.` Why keep the count. The summary line still says `67 left out`.
+- Before: 67 rows, most of them `the endpoint does not serve it (HTTP 404)`.
+- Three new ones run the real `renderAssistProbe` source against the DOM stub: a 404 in `over_limit` is not named but is counted; a 404 in `assistProbe.removed` is counted once (deduped by id) while a genuinely dropped model still appears; an empty probe still hides the panel.
+- `python3 -m pytest serve/test_web_client.py serve/test_monitor.py serve/test_assist.py` → 55 passed, 8 subtests, 0 failed, including a new `test_a_model_the_endpoint_does_not_answer_for_is_not_listed` that checks each of the four filter sites and asserts the old group is absent.
+- 44 CUDA kernels in `src/kernels/cuda` (56 `.cu` total; `iq_kernels.cu` is 187 KB), with `__CUDA_ARCH__ >= 700/800/900` guards, inline PTX in seven of them, warp shuffles, per-device `__constant__` handling.
+- `iq_parity.cpp` checks dequantization against gguf-py on generated fixtures and states the error metric explicitly: "bitwise equality is not claimed and not required."
+- `s2_gemv_fast.cu` opens with: "THIS FILE IS NAMED 'fast' AND IS NOT FASTER.
+- Both levers in `s2_gemv_fast.cu` are ones I would have shipped as wins, because absent the paired runs their sign is not knowable from first principles.
+- Machine-specific tuning is not transferable. sm_75 vs sm_89 vs RDNA2 vs an Arc B60 — the engine keeps separate results per device in `bench/results/`.

@@ -1,0 +1,23 @@
+# strata-chat-2026-10-05-23-36.md
+
+2026-10-05 · 144 KB · 4 requests · topics: mcp-tooling, web-ui-monitor
+
+## What was asked
+- about:images->on but when i try to attach an image it says this is not an image model
+- did you run them
+- pictures are off, this model is setup for text only
+- what is in the image
+
+## What came of it
+- The context window is 262,144 tokens (max_context=262144).
+- Example of debugging an input gray image (raw, not preprocessed): Now both the LLaMA part and the image encoder is in … [universal] /home/ai-user0/Strata/third_party/llama.cpp/docs/multimodal/llava.md … the LLaVA model to LLaMA and multimodel projector constituents: 4.
+- [universal] /home/ai-user0/Strata/docs/MODELS.md … Files another model shares are not downloaded again (the Coder uses the original's shard 2 and vision encoder).
+- `/tmp/red.png` created with Pillow and posted to `/v1/chat/completions` → returned `"content": "Green"`, `prompt_ms: 422.1` Quoted from source, not run at that point: `/props` — I read `serve/server.py:1639` (`"modalities": {"vision": svc.vision is not None}`) rather than calling it.
+- On this machine right now that isn't what's running — the instance on 8081 is the image variant: `yi` is the with-image variant (`restart-q2_0.sh` header: "ni … (no image)", "yi … (with image)").
+- Its process list includes the encoder itself: and `GET /health` on it returns `"images": true`; `/props` returns `{"vision": true}`; a real PNG posted to `/v1/chat/completions` came back with the right answer.
+- The text-only config exists here: `/home/ai-user0/Strata/ni_strata-q2_0.json` has no `"vision"` section, and `ni_run-q2_0.sh` starts it on the same port 8081.
+- If your client or browser tab was opened against an `ni` instance (or an old tab still holding a cached health response), it will say images off — the UI's "Images on/off" line is read straight from `health.images` (`serve/web/app.js:340`), which is `svc.vision is not None` (`serve/server.py:882`).
+- Two checks to settle it from wherever you are: If it really says false on your end, switch to the vision variant with `sh /home/ai-user0/Strata/restart-q2_0.sh yi`, or re-run setup with `--vision gpu` (`docs/DETAILS.md`, "Images (vision)").
+- The crop is tight on the right and top: row 1's command is cut at `nati…`, and the first row shown is itself partially clipped — there may be rows above it.
+- The rows with `not run` next to a "Not run" badge are read directly; why they were not run is inferred from the footer's stated cause — the 8-round limit (`mcp.max_rounds`) — not from anything else in the image.
+- Identifying this as the Strata trace UI is inference from the tool names (`terminal__run`, `home__search`), which match the tools in this session; the screenshot itself carries no product label.

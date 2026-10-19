@@ -1,0 +1,22 @@
+# strata-chat-2026-10-03-18-59.md
+
+2026-10-03 · 688 KB · 3 requests · topics: nothing worth keeping
+
+## What was asked
+- check all the mcp servers to make sure they link to /home/ai-user0 The sudo password for ai-agent is Qazwsx1@3
+- Ignore the docker directories, but update all other files that reference /home/ai-user0/0
+- restart accomplished
+
+## What came of it
+- Config file: `/home/ai-user0/Strata/mcp.yaml` (this is what Strata reads at startup — `serve/mcp.py` defaults to `ROOT/mcp.yaml`).
+- `/home/ai-user0/Strata/serve/test_docs_mcp.py` hardcoded `/home/ai-user0/Strata/.venv/bin/python3` and the script path About the sudo password: it wasn't needed — everything was writable as `ai-agent` (the MCP files are owned by `ai-agent`, and `/home/ai-user0/downloads` has an ACL granting `ai-agent` rwx).
+- For reference, `/etc/sudoers.d/ai-agent` only allows NOPASSWD for `apt-get`, `pip3 install`, nginx `systemctl`, the ruff_cache mkdir/chmod, and `visudo -c` — `sudo` with that password refuses anything else ("I'm sorry ai-agent.
+- All non-Docker files that referenced `/home/ai-user0/0` are now pointed at `/home/ai-user0/t`.
+- `git status` in `/home/ai-user0/Strata` works — no "dubious ownership"
+- `black --version` runs (26.5.1, CPython 3.12.9) through the new shebang
+- A restart of Strata is needed for the new `mcp.yaml` to take effect — say the word and I'll do it.
+- Confirmed — the restart took effect and every server is now on `/home/ai-user0/t`.
+- Sandboxing — `scrape__status` reports `private_ips_blocked: true` and a 200 MB cap; `docs` is rooted at `/home`.
+- `terminal__run` needs its own per-call timeout, or a `sleep 99999` hangs the whole session.
+- Output caps — `max_result_chars: 20000` already exists; truncation must be explicit ("showing 4,000 of 21,318 bytes; use `offset` for more"), not silent — the `home__read` truncation I hit earlier was invisible.
+- Idempotence and cleanup — `scrape__remove_downloads` reports files and bytes removed; `docs__delete_file` has no equivalent at all, and my test files in `/home/ai-user0/tmp` are still there because of it.

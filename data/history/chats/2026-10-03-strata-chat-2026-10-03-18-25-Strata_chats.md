@@ -1,0 +1,31 @@
+# strata-chat-2026-10-03-18-25.md
+
+2026-10-03 · 868 KB · 9 requests · topics: deployment-permissions, mcp-tooling, setup-configuration, testing-quality
+
+## What was asked
+- Test the terminal tools
+- are there any suggestions for improvement
+- using pyenv, can you not just install what ever python you need in a venv
+- so is the ai-agent user working for the terminal tools?
+- cant you give yourself permission to use the /usr directory
+- make those changes
+- Strata was restarted as user ai-agent
+- ai-agent is now running strata in its home directory
+- replace any hard path with a symbolic path $HOME
+
+## What came of it
+- ruff is available in the pyenv 3.12.9 interpreter but not the system `python3`.
+- Summary of what works and what the environment looks like: terminal_status — root is `/home`, 30 s default timeout, 20 000 char output cap, 115 allowlisted binaries.
+- ✅ `stdin` feeding works (`cat -A` echoed the piped lines).
+- ❌ `cwd` is strictly confined: `/etc` was rejected.
+- Also note `/dev/null` in a redirect is rejected as outside the root — use `head`/`grep` instead of `2>/dev/null`.
+- terminal_pipe — ✅ stage‑by‑stage exit codes; a failing middle stage is reported as `failed_stage: "false"` and downstream stages are not run.
+- Logs land in `/home/ai-user0/.terminal/jobs<name>` — note they are plain files, so `docs__read_file` refuses them ("not a document type"); use `process` action=log or a shell `cat`.
+- terminal_check / terminal_install — ⚠️ the check tool only probes binaries on PATH, so it reported ruff/mypy/pylint unavailable even though ruff 0.16.10 is installed under pyenv 3.12.9.
+- Workaround: run it directly — `RUFF_CACHE_DIR=/home/ai-user0/.ruff_cache /home/ai-user0/.pyenv/versions/3.12.9/bin/python3 -m ruff check …` (the default `/home/.ruff_cache` is not writable).
+- Installing into the system `python3` fails with PEP 668 `externally-managed-environment`; installing into the pyenv 3.12.9 interpreter works.
+- `terminal_check` can't see tools installed in the pyenv interpreters. It reported `ruff` missing even though ruff 0.16.10 is installed at `/home/ai-user0/.pyenv/versions/3.12.9/lib/python3.12/site-packages` — it only probes binaries on PATH.
+- Suggested fix: when a `python` argument is given, probe `<interpreter> -m ruff --version` / `-m mypy --version`, and otherwise scan `/home/ai-user0/.pyenv/versions/bin`.
+- The default cache/target paths point at a non-writable root. `/home` itself is not writable, only `/home/ai-user0/0…`.
+- `save_to` still returns the truncated stdout. I saved 23,893 bytes and the tool returned the same 20,000-char head I'd have gotten without saving — wasted context for no gain.
+- Better: when `save_to` is set, return path, byte count, line count, and a short head, with a note that the full output is on disk.

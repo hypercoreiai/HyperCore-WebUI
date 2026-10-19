@@ -3,9 +3,26 @@ engine/*
 !engine/.gitkeep
 tmp/
 logs/
+# Screenshots the README shows are committed; everything else under data/ is local.
 data/*
 !data/media/
 !data/media/*.png
+
+# The distilled history archive is part of the project: a clone needs the topic files,
+# the notes and the index, or standing task 1 has nothing to work from. The raw
+# transcripts (114 MB on this box) and the builder's stale scratch stay on the machine
+# that produced them.
+!data/history/
+data/history/*
+!data/history/README.md
+!data/history/chats/
+!data/history/chats/**
+!data/history/topics/
+!data/history/topics/**
+!data/history/notes/
+!data/history/notes/**
+!data/history/index.json
+!data/history/sources.md
 .venv/
 __pycache__/
 *.pyc

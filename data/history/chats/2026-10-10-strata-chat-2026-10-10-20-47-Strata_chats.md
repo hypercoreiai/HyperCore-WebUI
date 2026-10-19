@@ -1,0 +1,23 @@
+# strata-chat-2026-10-10-20-47.md
+
+2026-10-10 · 833 KB · 1 requests · topics: deployment-permissions, engine-internals, memory-vram, performance-benchmarks, setup-configuration
+
+## What was asked
+- run it ./run-q2_0.sh
+
+## What came of it
+- `tools/vision` configures llama.cpp via `add_subdirectory(${LLAMA_DIR} llama)`, and llama.cpp's own `CMakeLists.txt:150` does: The pinned checkout in `third_party/llama.cpp` was missing `cmake/build-info.cmake` (and `common/build-info.h`, `common/build-info.cpp.in`).
+- `setup.py` no longer trusts "is llama.cpp here" — it checks the six files the two builds actually read before either build runs, and re-unpacks the pinned archive when one is missing: If the archive itself is short of a file, setup names the file and keeps the zip, instead of dying three folders deep in CMake.
+- `python3 setup.py` (system interpreter) stops at Step 3 with `externally-managed-environment` (PEP 668).
+- `third_party/llama.cpp-3cf0325.done` is a leftover from the manual workaround at 19:34 (setup's marker would be `…zip.done`); nothing reads it.
+- Both symptoms trace to the supervisor refactor, not to a missing feature. `grep -cE "calibrat"` → 24 in both `/home/ai-user0/Strata/setup.py` and `/home/ai-user0/HyperCore-WebUI/setup.py`, and the offer block is identical apart from the name: The prompt is emitted after Step 4 (engine + image encoder).
+- `--yes` skips the offer by design ("`--yes` installs … are not held up by it") — my verification run used `--yes`, so it correctly did not tune.
+- The calibration store is per project: `/home/ai-user0/.config/strata/settings.json` (5 entries, tuned) vs `/home/ai-user0/.config/hypercore/settings.json` (6 entries).
+- The fork does not inherit Strata's tuning; the current config's key `…qwen3.8-flash-next-q2_0|131072|images` has no saved entry, so `cal is None` and the offer is live.
+- (Also note the prefix is now `[hypercore]`, not `[HYPER]`.)
+- `serve/server.py` — wire the narrator into the one lifecycle entry the server uses: The trigger strings are still valid for this engine: `src/program/generate.cpp:3777` prints `expert arena:`, `:3778` prints `loaded %.2f GiB at %.2f GiB/s`, `:4073` prints `expert cache N slots,`.
+- There is no `./run-q2_0.sh` in the fork — the script setup.py generates is `run-<model>.sh`, but this checkout has an underscore-prefixed, untracked copy: `_hypercore_run-q2_0.sh` (config `_hypercore-q2_0.json`, port 8080).
+- Compared with Strata's running args, `_hypercore-q2_0.json` is missing `--vram-reserve-mib 512`, has `--pcie-frac 0.75` (the default) instead of the measured `0.00`, `--spec-min-p 0.80` instead of `0.90`, and no `--tail-role-token`.
+- Next step needs your go-ahead: stop the Strata instance (pid 178995) so the 4090 is free, then re-run `_hypercore_run-q2_0.sh` to see the full READY handshake — or, if you'd rather keep Strata up, I can run the calibration path first so the config gets a VRAM reserve.
+- `[New LWP 187521]` is not the error — it's gdb noise standing in place of the error.
+- When the encoder dies, llama.cpp's crash reporter (`third_party/llama.cpp/ggml/src/ggml.c:159`, `ggml_print_backtrace`) forks and attaches gdb to itself, and gdb's stack trace goes to stdout — the same pipe the READY handshake is read from.

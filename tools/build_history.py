@@ -59,9 +59,13 @@ def _built_stamp() -> str:
 # A folder that does not exist is skipped, so a fresh clone reads only its own transcripts.
 # Override with CHAT_SOURCE (comma separated) or --source.
 HIST = Path(__file__).resolve().parents[1] / "data" / "history"
+# The older trees are looked for under the home directory of whoever runs the builder,
+# never a hardcoded account: a clone on another machine finds its own transcripts and
+# skips the rest.
+_USER_HOME = Path(os.environ.get("HYPERCORE_HOME") or Path.home())
 DEFAULT_SOURCES = (HIST / "_old_chats",
-                   Path("/home/ai-user0/black_box_chats"),
-                   Path("/home/ai-user0/Strata_chats"))
+                   _USER_HOME / "black_box_chats",
+                   _USER_HOME / "Strata_chats")
 
 
 def parse_sources(value: str | None) -> list[Path]:
@@ -311,7 +315,7 @@ HANDLE = re.compile(r"(?<=\s)@[A-Za-z0-9_]{3,}(?![\w.])")
 # tunes them, so they are kept, with an absolute path. Only names that moved or were
 # renamed are folded onto this repository.
 PROJECT = Path(__file__).resolve().parents[1]                      # this repository
-HOME = Path(os.environ.get("HOME") or "/home/ai-user0")
+HOME = Path(os.environ.get("HYPERCORE_HOME") or os.environ.get("HOME") or Path.home())
 ARCHIVE = PROJECT / "data" / "history" / "_old_chats"             # the transcript archive
 
 ALIASES = {

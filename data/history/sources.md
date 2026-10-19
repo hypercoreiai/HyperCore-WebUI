@@ -1,0 +1,230 @@
+# Sources
+
+Which transcript contributed to which category.
+
+- 2026-10-02 `2026-10-02-strata-chat-2026-10-02-22-43.md` (1 KB, 0 requests): nothing worth keeping
+- 2026-10-02 `strata-chat-2026-10-02-22-43.md` (279 KB, 10 requests): deployment-permissions, memory-vram
+- 2026-10-03 `2026-10-03-strata-chat-2026-10-03-12-03.md` (1 KB, 0 requests): hardware-environment, performance-benchmarks
+- 2026-10-03 `2026-10-03-strata-chat-2026-10-03-14-03.md` (3 KB, 0 requests): deployment-permissions, mcp-tooling
+- 2026-10-03 `2026-10-03-strata-chat-2026-10-03-15-05.md` (3 KB, 0 requests): deployment-permissions, mcp-tooling
+- 2026-10-03 `2026-10-03-strata-chat-2026-10-03-15-09.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-03 `2026-10-03-strata-chat-2026-10-03-18-25.md` (2 KB, 0 requests): deployment-permissions, testing-quality
+- 2026-10-03 `2026-10-03-strata-chat-2026-10-03-18-59.md` (2 KB, 0 requests): deployment-permissions, hardware-environment, mcp-tooling, testing-quality
+- 2026-10-03 `2026-10-03-strata-chat-2026-10-03-19-51.md` (3 KB, 0 requests): deployment-permissions, issue-log, mcp-tooling
+- 2026-10-03 `strata-chat-2026-10-03-12-03.md` (197 KB, 4 requests): deployment-permissions, general-knowledge, performance-benchmarks
+- 2026-10-03 `strata-chat-2026-10-03-14-03.md` (859 KB, 14 requests): deployment-permissions, hardware-environment, issue-log, mcp-tooling, memory-vram, setup-configuration, web-ui-monitor
+- 2026-10-03 `strata-chat-2026-10-03-15-05.md` (1057 KB, 5 requests): deployment-permissions, mcp-tooling, testing-quality
+- 2026-10-03 `strata-chat-2026-10-03-15-09.md` (1078 KB, 5 requests): mcp-tooling, testing-quality
+- 2026-10-03 `strata-chat-2026-10-03-18-25.md` (868 KB, 9 requests): deployment-permissions, mcp-tooling, setup-configuration, testing-quality
+- 2026-10-03 `strata-chat-2026-10-03-18-59.md` (688 KB, 3 requests): nothing worth keeping
+- 2026-10-03 `strata-chat-2026-10-03-19-51.md` (1171 KB, 7 requests): deployment-permissions, engine-internals, mcp-tooling
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-03-57.md` (3 KB, 0 requests): engine-internals, hardware-environment, mcp-tooling, memory-vram
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-05-16.md` (2 KB, 0 requests): deployment-permissions, mcp-tooling, setup-configuration, testing-quality
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-05-39.md` (2 KB, 0 requests): mcp-tooling
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-05-56.md` (3 KB, 0 requests): prompting-behaviour, testing-quality, web-ui-monitor
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-06-01.md` (1 KB, 0 requests): deployment-permissions, mcp-tooling, testing-quality
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-06-37.md` (1 KB, 0 requests): deployment-permissions, mcp-tooling
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-07-56.md` (3 KB, 0 requests): general-knowledge, memory-vram
+- 2026-10-04 `2026-10-04-strata-chat-2026-10-04-20-52.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-04 `strata-chat-2026-10-04-03-57.md` (894 KB, 16 requests): deployment-permissions, mcp-tooling, prompting-behaviour, testing-quality
+- 2026-10-04 `strata-chat-2026-10-04-05-16.md` (1138 KB, 2 requests): mcp-tooling
+- 2026-10-04 `strata-chat-2026-10-04-05-39.md` (525 KB, 1 requests): mcp-tooling, testing-quality
+- 2026-10-04 `strata-chat-2026-10-04-05-56.md` (528 KB, 1 requests): nothing worth keeping
+- 2026-10-04 `strata-chat-2026-10-04-06-01.md` (42 KB, 1 requests): nothing worth keeping
+- 2026-10-04 `strata-chat-2026-10-04-06-37.md` (197 KB, 2 requests): deployment-permissions, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-04 `strata-chat-2026-10-04-07-56.md` (318 KB, 4 requests): deployment-permissions, general-knowledge
+- 2026-10-04 `strata-chat-2026-10-04-20-52.md` (426 KB, 5 requests): nothing worth keeping
+- 2026-10-05 `2026-10-05-strata-chat-2026-10-05-20-19.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-05 `2026-10-05-strata-chat-2026-10-05-23-07.md` (3 KB, 0 requests): mcp-tooling, setup-configuration
+- 2026-10-05 `2026-10-05-strata-chat-2026-10-05-23-31.md` (1 KB, 0 requests): deployment-permissions, testing-quality
+- 2026-10-05 `2026-10-05-strata-chat-2026-10-05-23-36.md` (3 KB, 0 requests): deployment-permissions, issue-log, mcp-tooling, setup-configuration, web-ui-monitor
+- 2026-10-05 `strata-chat-2026-10-05-20-19.md` (858 KB, 10 requests): deployment-permissions, issue-log, mcp-tooling, setup-configuration, testing-quality
+- 2026-10-05 `strata-chat-2026-10-05-23-07.md` (1021 KB, 6 requests): deployment-permissions, hardware-environment, issue-log, mcp-tooling, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-05 `strata-chat-2026-10-05-23-31.md` (130 KB, 1 requests): deployment-permissions
+- 2026-10-05 `strata-chat-2026-10-05-23-36.md` (144 KB, 4 requests): mcp-tooling, web-ui-monitor
+- 2026-10-06 `2026-10-06-strata-chat-2026-10-06-00-55.md` (1 KB, 0 requests): mcp-tooling
+- 2026-10-06 `2026-10-06-strata-chat-2026-10-06-01-06.md` (2 KB, 0 requests): deployment-permissions, web-ui-monitor
+- 2026-10-06 `2026-10-06-strata-chat-2026-10-06-14-10.md` (2 KB, 0 requests): deployment-permissions, mcp-tooling
+- 2026-10-06 `2026-10-06-strata-chat-2026-10-06-18-22.md` (1 KB, 0 requests): deployment-permissions, web-ui-monitor
+- 2026-10-06 `2026-10-06-strata-chat-2026-10-06-18-57.md` (3 KB, 0 requests): engine-internals, hardware-environment, mcp-tooling, setup-configuration, web-ui-monitor
+- 2026-10-06 `2026-10-06-strata-chat-2026-10-06-19-27.md` (0 KB, 0 requests): nothing worth keeping
+- 2026-10-06 `2026-10-06-strata-chat-2026-10-06-23-05.md` (3 KB, 0 requests): deployment-permissions, mcp-tooling, open-decisions, testing-quality
+- 2026-10-06 `strata-chat-2026-10-06-00-55.md` (611 KB, 2 requests): hardware-environment, mcp-tooling, testing-quality
+- 2026-10-06 `strata-chat-2026-10-06-01-06.md` (57 KB, 1 requests): nothing worth keeping
+- 2026-10-06 `strata-chat-2026-10-06-14-10.md` (673 KB, 4 requests): deployment-permissions, mcp-tooling, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-06 `strata-chat-2026-10-06-18-22.md` (555 KB, 1 requests): deployment-permissions
+- 2026-10-06 `strata-chat-2026-10-06-18-57.md` (575 KB, 15 requests): web-ui-monitor
+- 2026-10-06 `strata-chat-2026-10-06-19-27.md` (208 KB, 1 requests): nothing worth keeping
+- 2026-10-06 `strata-chat-2026-10-06-23-05.md` (402 KB, 4 requests): deployment-permissions, issue-log, mcp-tooling, testing-quality, web-ui-monitor
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-07-26.md` (2 KB, 0 requests): hardware-environment, mcp-tooling
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-09-31.md` (3 KB, 0 requests): mcp-tooling
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-12-05.md` (1 KB, 0 requests): mcp-tooling, open-decisions, web-ui-monitor
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-14-25.md` (0 KB, 0 requests): nothing worth keeping
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-14-36.md` (1 KB, 0 requests): issue-log
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-17-37.md` (3 KB, 0 requests): deployment-permissions, general-knowledge, testing-quality
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-18-16.md` (2 KB, 0 requests): general-knowledge
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-18-39.md` (1 KB, 0 requests): deployment-permissions, general-knowledge, issue-log
+- 2026-10-07 `2026-10-07-strata-chat-2026-10-07-20-11.md` (1 KB, 0 requests): deployment-permissions, general-knowledge, testing-quality
+- 2026-10-07 `strata-chat-2026-10-07-07-26.md` (284 KB, 2 requests): nothing worth keeping
+- 2026-10-07 `strata-chat-2026-10-07-09-31.md` (1212 KB, 14 requests): deployment-permissions, engine-internals, hardware-environment, mcp-tooling, memory-vram, performance-benchmarks, prompting-behaviour, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-07 `strata-chat-2026-10-07-12-05.md` (62 KB, 1 requests): nothing worth keeping
+- 2026-10-07 `strata-chat-2026-10-07-14-25.md` (303 KB, 0 requests): nothing worth keeping
+- 2026-10-07 `strata-chat-2026-10-07-14-36.md` (189 KB, 0 requests): issue-log
+- 2026-10-07 `strata-chat-2026-10-07-17-37.md` (807 KB, 9 requests): deployment-permissions, hardware-environment, issue-log, memory-vram, performance-benchmarks, prompting-behaviour
+- 2026-10-07 `strata-chat-2026-10-07-18-16.md` (256 KB, 0 requests): deployment-permissions, engine-internals, general-knowledge, issue-log
+- 2026-10-07 `strata-chat-2026-10-07-18-39.md` (64 KB, 1 requests): nothing worth keeping
+- 2026-10-07 `strata-chat-2026-10-07-20-11.md` (139 KB, 3 requests): nothing worth keeping
+- 2026-10-08 `2026-10-08-strata-chat-2026-10-08-16-10.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `2026-10-08-strata-chat-2026-10-08-16-14.md` (1 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `2026-10-08-strata-chat-2026-10-08-16-17.md` (1 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `2026-10-08-strata-chat-2026-10-08-16-37.md` (0 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `2026-10-08-strata-chat-2026-10-08-16-41.md` (1 KB, 0 requests): mcp-tooling
+- 2026-10-08 `hypercore-chat-2026-10-08-08-56.md` (5 KB, 4 requests): nothing worth keeping
+- 2026-10-08 `strata-chat-2026-10-08-16-10.md` (157 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `strata-chat-2026-10-08-16-14.md` (133 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `strata-chat-2026-10-08-16-17.md` (192 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `strata-chat-2026-10-08-16-37.md` (148 KB, 0 requests): nothing worth keeping
+- 2026-10-08 `strata-chat-2026-10-08-16-41.md` (84 KB, 1 requests): nothing worth keeping
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-08-03.md` (3 KB, 0 requests): deployment-permissions, engine-internals, hardware-environment, setup-configuration, testing-quality
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-08-40.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-09-50.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-11-32.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-12-32.md` (3 KB, 0 requests): mcp-tooling, web-ui-monitor
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-15-05.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-16-17.md` (3 KB, 0 requests): hardware-environment, testing-quality, web-ui-monitor
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-16-19.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-18-55.md` (2 KB, 0 requests): engine-internals, hardware-environment, testing-quality, web-ui-monitor
+- 2026-10-09 `2026-10-09-strata-chat-2026-10-09-22-41.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-09 `strata-chat-2026-10-09-08-03.md` (325 KB, 4 requests): engine-internals, hardware-environment, memory-vram, performance-benchmarks, setup-configuration
+- 2026-10-09 `strata-chat-2026-10-09-08-40.md` (946 KB, 9 requests): deployment-permissions, mcp-tooling, web-ui-monitor
+- 2026-10-09 `strata-chat-2026-10-09-09-50.md` (1748 KB, 11 requests): hardware-environment, mcp-tooling, setup-configuration
+- 2026-10-09 `strata-chat-2026-10-09-11-32.md` (2542 KB, 17 requests): deployment-permissions, mcp-tooling
+- 2026-10-09 `strata-chat-2026-10-09-12-32.md` (1069 KB, 6 requests): setup-configuration
+- 2026-10-09 `strata-chat-2026-10-09-15-05.md` (3529 KB, 9 requests): deployment-permissions, issue-log, mcp-tooling, prompting-behaviour, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-09 `strata-chat-2026-10-09-16-17.md` (652 KB, 5 requests): deployment-permissions, hardware-environment, memory-vram
+- 2026-10-09 `strata-chat-2026-10-09-18-55.md` (2520 KB, 3 requests): deployment-permissions, engine-internals, general-knowledge, hardware-environment, issue-log, mcp-tooling, memory-vram, performance-benchmarks, setup-configuration, testing-quality
+- 2026-10-09 `strata-chat-2026-10-09-22-41.md` (6685 KB, 3 requests): deployment-permissions, engine-internals, hardware-environment, mcp-tooling, memory-vram, performance-benchmarks, testing-quality, web-ui-monitor
+- 2026-10-10 `2026-10-10-hypercore-chat-2026-10-10-11-52.md` (3 KB, 0 requests): engine-internals, hardware-environment, mcp-tooling, setup-configuration, testing-quality
+- 2026-10-10 `2026-10-10-hypercore-chat-2026-10-10-16-40.md` (2 KB, 0 requests): mcp-tooling, performance-benchmarks, setup-configuration, testing-quality
+- 2026-10-10 `2026-10-10-hypercore-chat-2026-10-10-17-15.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-hypercore-chat-2026-10-10-18-06.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-hypercore-chat-2026-10-10-18-54.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-hypercore-chat-2026-10-10-19-47.md` (0 KB, 0 requests): engine-internals, web-ui-monitor
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-00-02.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-03-30.md` (2 KB, 0 requests): engine-internals, hardware-environment, mcp-tooling, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-05-20.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-07-17.md` (4 KB, 0 requests): deployment-permissions, engine-internals, mcp-tooling, testing-quality
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-08-05.md` (4 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-08-34.md` (4 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-12-04.md` (4 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-19-47.md` (3 KB, 0 requests): mcp-tooling, setup-configuration, testing-quality
+- 2026-10-10 `2026-10-10-strata-chat-2026-10-10-20-47.md` (3 KB, 0 requests): memory-vram, setup-configuration
+- 2026-10-10 `hypercore-chat-2026-10-10-11-52.md` (855 KB, 9 requests): engine-internals, hardware-environment, issue-log, mcp-tooling, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-10 `hypercore-chat-2026-10-10-16-40.md` (1494 KB, 3 requests): memory-vram, performance-benchmarks, web-ui-monitor
+- 2026-10-10 `hypercore-chat-2026-10-10-17-15.md` (2979 KB, 4 requests): memory-vram
+- 2026-10-10 `hypercore-chat-2026-10-10-18-06.md` (3537 KB, 5 requests): engine-internals, hardware-environment, issue-log, memory-vram, performance-benchmarks, testing-quality, web-ui-monitor
+- 2026-10-10 `hypercore-chat-2026-10-10-18-54.md` (4830 KB, 7 requests): deployment-permissions, hardware-environment, issue-log, memory-vram, setup-configuration
+- 2026-10-10 `hypercore-chat-2026-10-10-19-47.md` (1775 KB, 0 requests): nothing worth keeping
+- 2026-10-10 `strata-chat-2026-10-10-00-02.md` (7857 KB, 5 requests): deployment-permissions, engine-internals, issue-log, setup-configuration, testing-quality
+- 2026-10-10 `strata-chat-2026-10-10-03-30.md` (1266 KB, 2 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, mcp-tooling, setup-configuration, testing-quality
+- 2026-10-10 `strata-chat-2026-10-10-05-20.md` (2768 KB, 8 requests): deployment-permissions, engine-internals, hardware-environment, mcp-tooling, prompting-behaviour, setup-configuration
+- 2026-10-10 `strata-chat-2026-10-10-07-17.md` (1242 KB, 15 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, mcp-tooling, memory-vram, testing-quality, web-ui-monitor
+- 2026-10-10 `strata-chat-2026-10-10-08-05.md` (1821 KB, 16 requests): deployment-permissions, hardware-environment, issue-log, performance-benchmarks, setup-configuration, testing-quality
+- 2026-10-10 `strata-chat-2026-10-10-08-34.md` (1967 KB, 16 requests): engine-internals
+- 2026-10-10 `strata-chat-2026-10-10-12-04.md` (2776 KB, 19 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, mcp-tooling, performance-benchmarks, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-10 `strata-chat-2026-10-10-19-47.md` (974 KB, 10 requests): deployment-permissions, hardware-environment, mcp-tooling, memory-vram, setup-configuration, testing-quality
+- 2026-10-10 `strata-chat-2026-10-10-20-47.md` (833 KB, 1 requests): deployment-permissions, engine-internals, memory-vram, performance-benchmarks, setup-configuration
+- 2026-10-11 `2026-10-11-hypercore-chat-2026-10-11-06-34.md` (2 KB, 0 requests): hardware-environment, testing-quality, web-ui-monitor
+- 2026-10-11 `2026-10-11-hypercore-chat-2026-10-11-07-09.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-11 `2026-10-11-hypercore-chat-2026-10-11-08-01.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-11 `2026-10-11-hypercore-chat-2026-10-11-08-31.md` (3 KB, 0 requests): nothing worth keeping
+- 2026-10-11 `2026-10-11-hypercore-chat-2026-10-11-08-54.md` (2 KB, 0 requests): nothing worth keeping
+- 2026-10-11 `hypercore-chat-2026-10-11-11-46.md` (3163 KB, 7 requests): engine-internals, hardware-environment, issue-log, open-decisions, prompting-behaviour, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-11 `hypercore-chat-2026-10-11-13-20.md` (3957 KB, 9 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, mcp-tooling, performance-benchmarks, prompting-behaviour, setup-configuration, testing-quality
+- 2026-10-11 `hypercore-chat-2026-10-11-14-18.md` (4767 KB, 12 requests): deployment-permissions, engine-internals, hardware-environment, memory-vram, prompting-behaviour, setup-configuration, testing-quality
+- 2026-10-11 `hypercore-chat-2026-10-11-15-51.md` (753 KB, 5 requests): engine-internals, hardware-environment, issue-log, memory-vram, open-decisions, performance-benchmarks, setup-configuration, web-ui-monitor
+- 2026-10-11 `hypercore-chat-2026-10-11-17-31.md` (1296 KB, 10 requests): deployment-permissions, testing-quality, web-ui-monitor
+- 2026-10-11 `hypercore-chat-2026-10-11-22-55.md` (3836 KB, 18 requests): deployment-permissions, hardware-environment, issue-log, memory-vram, prompting-behaviour, setup-configuration, testing-quality
+- 2026-10-11 `hypercore-chat-2026-10-11-06-34.md` (2373 KB, 4 requests): nothing worth keeping
+- 2026-10-11 `hypercore-chat-2026-10-11-07-09.md` (2751 KB, 7 requests): issue-log, prompting-behaviour, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-11 `hypercore-chat-2026-10-11-08-01.md` (3801 KB, 12 requests): engine-internals, hardware-environment, memory-vram, prompting-behaviour, setup-configuration, web-ui-monitor
+- 2026-10-11 `hypercore-chat-2026-10-11-08-31.md` (4152 KB, 15 requests): issue-log, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-11 `hypercore-chat-2026-10-11-08-54.md` (2736 KB, 7 requests): nothing worth keeping
+- 2026-10-12 `hypercore-chat-2026-10-12-07-50.md` (396 KB, 0 requests): memory-vram, testing-quality
+- 2026-10-12 `hypercore-chat-2026-10-12-10-25.md` (894 KB, 2 requests): nothing worth keeping
+- 2026-10-12 `hypercore-chat-2026-10-12-11-07.md` (484 KB, 1 requests): deployment-permissions, engine-internals
+- 2026-10-12 `hypercore-chat-2026-10-12-13-18.md` (784 KB, 1 requests): deployment-permissions, engine-internals, issue-log, setup-configuration, web-ui-monitor
+- 2026-10-12 `hypercore-chat-2026-10-12-14-31.md` (752 KB, 2 requests): engine-internals, hardware-environment, memory-vram, performance-benchmarks, testing-quality
+- 2026-10-12 `hypercore-chat-2026-10-12-17-13.md` (2349 KB, 4 requests): deployment-permissions, hardware-environment, issue-log, mcp-tooling, memory-vram, setup-configuration, testing-quality
+- 2026-10-12 `hypercore-chat-2026-10-12-17-24.md` (2463 KB, 5 requests): nothing worth keeping
+- 2026-10-13 `hypercore-chat-2026-10-13-00-06.md` (1333 KB, 10 requests): deployment-permissions, hardware-environment, issue-log, memory-vram, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-13 `hypercore-chat-2026-10-13-00-20.md` (1391 KB, 11 requests): web-ui-monitor
+- 2026-10-13 `hypercore-chat-2026-10-13-03-22.md` (1591 KB, 10 requests): deployment-permissions, engine-internals, hardware-environment, memory-vram, testing-quality
+- 2026-10-13 `hypercore-chat-2026-10-13-08-16.md` (2968 KB, 3 requests): deployment-permissions, engine-internals, hardware-environment, memory-vram, performance-benchmarks, setup-configuration, web-ui-monitor
+- 2026-10-13 `hypercore-chat-2026-10-13-09-01.md` (3305 KB, 7 requests): mcp-tooling, testing-quality
+- 2026-10-13 `hypercore-chat-2026-10-13-21-39.md` (222 KB, 15 requests): deployment-permissions, mcp-tooling, open-decisions, prompting-behaviour, testing-quality
+- 2026-10-13 `hypercore-chat-2026-10-13-22-03.md` (508 KB, 18 requests): hardware-environment, web-ui-monitor
+- 2026-10-13 `hypercore-chat-2026-10-13-22-15.md` (538 KB, 18 requests): web-ui-monitor
+- 2026-10-13 `hypercore-chat-2026-10-13-22-17.md` (538 KB, 23 requests): nothing worth keeping
+- 2026-10-13 `strata-chat-2026-10-13-21-31.md` (791 KB, 13 requests): engine-internals, general-knowledge, hardware-environment, issue-log, mcp-tooling, memory-vram, prompting-behaviour, setup-configuration, web-ui-monitor
+- 2026-10-13 `strata-chat-2026-10-13-21-44.md` (799 KB, 14 requests): setup-configuration, web-ui-monitor
+- 2026-10-14 `hypercore-chat-2026-10-14-12-55.md` (843 KB, 40 requests): deployment-permissions, issue-log, memory-vram, open-decisions, web-ui-monitor
+- 2026-10-14 `hypercore-chat-2026-10-14-16-25.md` (205 KB, 2 requests): hardware-environment, mcp-tooling, testing-quality, web-ui-monitor
+- 2026-10-14 `hypercore-chat-2026-10-14-22-20.md` (136 KB, 0 requests): nothing worth keeping
+- 2026-10-14 `strata-chat-2026-10-14-12-06.md` (4506 KB, 20 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, memory-vram, performance-benchmarks, setup-configuration, web-ui-monitor
+- 2026-10-14 `strata-chat-2026-10-14-12-53.md` (5706 KB, 21 requests): deployment-permissions, engine-internals, memory-vram, web-ui-monitor
+- 2026-10-14 `strata-chat-2026-10-14-13-13.md` (3783 KB, 21 requests): deployment-permissions, engine-internals, issue-log, memory-vram
+- 2026-10-14 `strata-chat-2026-10-14-14-42.md` (531 KB, 1 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, open-decisions, prompting-behaviour, setup-configuration, web-ui-monitor
+- 2026-10-14 `strata-chat-2026-10-14-15-12.md` (658 KB, 1 requests): nothing worth keeping
+- 2026-10-14 `strata-chat-2026-10-14-15-52.md` (1195 KB, 1 requests): engine-internals, issue-log, memory-vram
+- 2026-10-14 `strata-chat-2026-10-14-17-09.md` (1389 KB, 2 requests): performance-benchmarks, setup-configuration
+- 2026-10-15 `hypercore-chat-2026-10-15-04-36.md` (276 KB, 2 requests): hardware-environment, memory-vram
+- 2026-10-15 `hypercore-chat-2026-10-15-04-40.md` (318 KB, 2 requests): nothing worth keeping
+- 2026-10-15 `hypercore-chat-2026-10-15-05-16.md` (703 KB, 5 requests): engine-internals, hardware-environment, memory-vram, setup-configuration, web-ui-monitor
+- 2026-10-15 `hypercore-chat-2026-10-15-05-44.md` (861 KB, 6 requests): deployment-permissions, engine-internals, hardware-environment, setup-configuration
+- 2026-10-15 `strata-chat-2026-10-15-07-43.md` (28 KB, 1 requests): hardware-environment
+- 2026-10-15 `strata-chat-2026-10-15-09-32.md` (303 KB, 2 requests): deployment-permissions, engine-internals, issue-log
+- 2026-10-15 `strata-chat-2026-10-15-09-53.md` (328 KB, 3 requests): setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-15 `strata-chat-2026-10-15-14-22.md` (1342 KB, 9 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, memory-vram
+- 2026-10-15 `strata-chat-2026-10-15-14-55.md` (1590 KB, 10 requests): memory-vram
+- 2026-10-15 `strata-chat-2026-10-15-16-58.md` (902 KB, 1 requests): engine-internals, hardware-environment, memory-vram, testing-quality, web-ui-monitor
+- 2026-10-15 `strata-chat-2026-10-15-18-12.md` (1353 KB, 3 requests): memory-vram
+- 2026-10-15 `strata-chat-2026-10-15-18-43.md` (1640 KB, 4 requests): deployment-permissions, issue-log, open-decisions, setup-configuration
+- 2026-10-15 `strata-chat-2026-10-15-18-56.md` (152 KB, 1 requests): nothing worth keeping
+- 2026-10-15 `strata-chat-2026-10-15-19-15.md` (573 KB, 1 requests): nothing worth keeping
+- 2026-10-15 `strata-chat-2026-10-15-19-50.md` (778 KB, 3 requests): deployment-permissions, general-knowledge, hardware-environment, open-decisions, performance-benchmarks, prompting-behaviour, setup-configuration
+- 2026-10-15 `strata-chat-2026-10-15-21-07.md` (556 KB, 4 requests): engine-internals, prompting-behaviour
+- 2026-10-15 `strata-chat-2026-10-15-21-30.md` (611 KB, 6 requests): nothing worth keeping
+- 2026-10-16 `clean_add_timing_strata-chat-2026-10-16-02-09.md` (508 KB, 4 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, memory-vram, open-decisions, performance-benchmarks, prompting-behaviour, testing-quality, web-ui-monitor
+- 2026-10-16 `hypercore-chat-2026-10-16-05-57.md` (478 KB, 2 requests): engine-internals, memory-vram, performance-benchmarks
+- 2026-10-16 `hypercore-chat-2026-10-16-09-35.md` (603 KB, 2 requests): memory-vram
+- 2026-10-16 `hypercore-chat-2026-10-16-12-00.md` (2097 KB, 6 requests): deployment-permissions, engine-internals, hardware-environment, memory-vram, performance-benchmarks, testing-quality
+- 2026-10-16 `hypercore-chat-2026-10-16-13-08.md` (2384 KB, 6 requests): deployment-permissions
+- 2026-10-16 `hypercore-chat-2026-10-16-13-27.md` (2714 KB, 7 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, memory-vram, open-decisions, performance-benchmarks
+- 2026-10-16 `hypercore-chat-2026-10-16-14-37.md` (3572 KB, 8 requests): hardware-environment, mcp-tooling
+- 2026-10-16 `hypercore-chat-2026-10-16-17-22.md` (910 KB, 3 requests): general-knowledge, issue-log, mcp-tooling, prompting-behaviour, testing-quality, web-ui-monitor
+- 2026-10-16 `hypercore-chat-2026-10-16-23-49.md` (1208 KB, 3 requests): deployment-permissions, hardware-environment, memory-vram, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-16 `resume_strata-chat-2026-10-16-03-08.md` (287 KB, 3 requests): deployment-permissions, engine-internals, hardware-environment, memory-vram, performance-benchmarks, web-ui-monitor
+- 2026-10-16 `strata-chat-2026-10-16-01-58.md` (1281 KB, 6 requests): nothing worth keeping
+- 2026-10-16 `strata-chat-2026-10-16-02-29.md` (124 KB, 2 requests): hardware-environment, memory-vram, open-decisions, performance-benchmarks, testing-quality, web-ui-monitor
+- 2026-10-16 `strata-chat-2026-10-16-03-08.md` (411 KB, 5 requests): nothing worth keeping
+- 2026-10-16 `strata-chat-2026-10-16-03-29.md` (72 KB, 1 requests): deployment-permissions
+- 2026-10-16 `strata-chat-2026-10-16-04-56.md` (265 KB, 1 requests): memory-vram, performance-benchmarks
+- 2026-10-17 `2026-10-17-21-51-This-is-your-new-HyperCore-WebUi-environment.-Add-a-button-t.md` (734 KB, 7 requests): deployment-permissions, engine-internals, open-decisions, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-17 `hypercore-chat-2026-10-17-00-38.md` (1504 KB, 4 requests): engine-internals, hardware-environment, memory-vram
+- 2026-10-17 `hypercore-chat-2026-10-17-00-54.md` (1635 KB, 6 requests): nothing worth keeping
+- 2026-10-17 `hypercore-chat-2026-10-17-12-04.md` (1546 KB, 2 requests): deployment-permissions, engine-internals, issue-log, memory-vram, testing-quality, web-ui-monitor
+- 2026-10-17 `hypercore-chat-2026-10-17-14-55.md` (84 KB, 1 requests): nothing worth keeping
+- 2026-10-17 `hypercore-chat-2026-10-17-15-32.md` (330 KB, 4 requests): engine-internals, hardware-environment, memory-vram
+- 2026-10-17 `strata-chat-2026-10-17-14-18.md` (301 KB, 1 requests): engine-internals, memory-vram, setup-configuration
+- 2026-10-17 `strata-chat-2026-10-17-20-23.md` (2931 KB, 4 requests): deployment-permissions, engine-internals, hardware-environment, memory-vram, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-18 `2026-10-18-10-28-This-is-your-new-HyperCore-WebUi-environment.-Add-a-button-t.md` (959 KB, 9 requests): mcp-tooling
+- 2026-10-18 `2026-10-18-10-47-This-is-your-new-HyperCore-WebUi-environment.-Add-a-button-t.md` (845 KB, 9 requests): nothing worth keeping
+- 2026-10-18 `2026-10-18-12-19-continue.md` (665 KB, 1 requests): deployment-permissions, engine-internals, hardware-environment, issue-log, mcp-tooling, prompting-behaviour, setup-configuration, web-ui-monitor
+- 2026-10-18 `2026-10-18-15-14-continue.md` (884 KB, 5 requests): deployment-permissions, mcp-tooling, open-decisions, setup-configuration, testing-quality, web-ui-monitor
+- 2026-10-18 `strata-chat-2026-10-18-10-28.md` (3561 KB, 5 requests): nothing worth keeping
+- 2026-10-19 `2026-10-19-22-52-Review-this-project-and-find-10-things-that-could-be-improve.md` (709 KB, 2 requests): deployment-permissions, issue-log, mcp-tooling, testing-quality, web-ui-monitor
+- unknown `unknown-context.md` (3 KB, 0 requests): engine-internals, memory-vram, prompting-behaviour, web-ui-monitor
+- unknown `unknown-end_hypercore.md` (0 KB, 0 requests): nothing worth keeping
+- unknown `unknown-strata-engine-layout.md` (2 KB, 0 requests): nothing worth keeping
+- unknown `strata-engine-layout.md` (29 KB, 0 requests): nothing worth keeping

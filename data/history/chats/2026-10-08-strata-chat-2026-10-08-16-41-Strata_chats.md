@@ -1,0 +1,17 @@
+# strata-chat-2026-10-08-16-41.md
+
+2026-10-08 · 84 KB · 1 requests · topics: nothing worth keeping
+
+## What was asked
+- run all tool tests
+
+## What came of it
+- Back to the [README](../README.md#how-does-it-work).
+- On a PC with little RAM and a big card, the [low-RAM mode](MODELS.md#a-big-graphics-card-and-little-ram) keeps in RAM only what the GPU does not hold.
+- Long texts are read in big pieces (up to 8,192 tokens - pieces of words - at a time), which is why a long document or code base is read at over 1,000 tokens per second.
+- The [details](DETAILS.md#how-it-works) explain every part and its numbers, and the [paper](paper/Strata-Paper.pdf) tells the whole story, with the measurements behind it.
+- Built with parts of [llama.cpp / ggml](https://github.com/ggml-org/llama.cpp) (MIT).
+- `mcp.yaml` exists on disk but is not in HEAD, and the tool reports "git has no HEAD for mcp.yaml" — misleading, since HEAD exists (`82f46a8c`) and the same call on tracked `CMakeLists.txt` returned `identical: true`.
+- `terminal__query` with `action: toml` on a `.json` correctly refuses rather than guessing (`BUILD.json is not valid TOML`).
+- `terminal__debug` `action: core` requires the `core` parameter; passing only a binary returns "is not a core file".
+- `home__reindex` is asynchronous — `home__status` shows `walking` until it finishes.
