@@ -8,6 +8,8 @@ the same build targets and the same fallback.
 """
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -34,6 +36,14 @@ class EntryPointTests(unittest.TestCase):
         sh, bat = read("run.sh"), read("run.bat")
         self.assertIn('EXTRA="$EXTRA $arg"', sh)
         self.assertIn('if "!flag:~0,1!"=="-" set ARGS=!ARGS! %%a', bat)
+
+    def test_a_stray_name_falls_back_to_the_newest_config_on_both_sides(self) -> None:
+        """The fallback is the same rule on both platforms."""
+        sh, bat = read("run.sh"), read("run.bat")
+        for name in (sh, bat):
+            self.assertIn("using the newest", name,
+                          "a name that matches nothing is treated as nothing built")
+            self.assertIn("run-*.json", name, "the fallback does not look at the run configs")
 
     def test_neither_run_script_picks_the_template_by_accident(self) -> None:
         sh, bat = read("run.sh"), read("run.bat")
@@ -118,7 +128,8 @@ class FreshCloneStartTests(unittest.TestCase):
         proc = subprocess.run(["sh", str(d / "run.sh"), *args], capture_output=True,
                               text=True, cwd=d, timeout=20, check=False)
         line = next((l for l in proc.stdout.splitlines() if l.startswith("server:")), "")
-        return proc.returncode, line, proc.stdout
+        # stderr too: a decision the entry point took with a warning is still a decision.
+        return proc.returncode, line, proc.stdout + proc.stderr
 
     def test_nothing_installed_still_starts_the_app(self) -> None:
         d = self.scratch()
@@ -149,6 +160,29 @@ class FreshCloneStartTests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("--config config/run-q2_0.json", call)
         self.assertNotIn("--ui-only", call)
+
+    def test_a_name_that_matches_nothing_falls_back_to_the_newest_config(self) -> None:
+        """`run.sh 8081` is a stray argument, not a machine with nothing built on it.
+
+        Refusing the name and starting engineless leaves a model that is sitting in
+        engine/ unstarted, which is the state the user reads as "the build did not work".
+        """
+        d = self.scratch()
+        older = d / "config" / "run-iq2_xs.json"
+        older.write_text(json.dumps({"model_name": "IQ2_S"}), encoding="utf-8")
+        newest = d / "config" / "run-q2_0.json"
+        newest.write_text(json.dumps({"model_name": "Q2_0"}), encoding="utf-8")
+        os.utime(older, (1000, 1000))          # make the order of "newest" unambiguous
+        os.utime(newest, (2000, 2000))
+        (d / "config" / "run-example.json").write_text(
+            json.dumps({"exe": "ABSOLUTE/PATH/TO/strata"}), encoding="utf-8")
+        code, call, out = self.server_call(d, "8081")
+        self.assertEqual(code, 0, f"run.sh gave up on a name it could not read: {out}")
+        self.assertIn("--config config/run-q2_0.json", call,
+                      "the fallback did not take the newest run config")
+        self.assertNotIn("run-example.json", call, "the fallback took the template")
+        self.assertIn("no config named '8081'", out + "", "the fallback said nothing about the name")
+        self.assertNotIn("--ui-only", call, "a machine with a run config was started engineless")
 
 
 class ScratchIsolationTests(unittest.TestCase):

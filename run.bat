@@ -41,6 +41,21 @@ if "%~1" neq "" (
     else if exist "config\run-%~1" set CFG=config\run-%~1
     else if exist "config\%~1.json" set CFG=config\%~1.json
     else if exist "config\run-%~1.json" set CFG=config\run-%~1.json
+    rem The name matches nothing. That is usually a mistyped version or a stray argument
+    rem (run.bat 8081), not a machine with nothing built on it: the newest run config keeps
+    rem the engine running instead of starting the app engineless for a model that is
+    rem sitting in engine\.
+    if not defined CFG (
+        for /f "delims=" %%f in ('dir /b /o-d config\run-*.json 2^>nul') do (
+            if not defined CFG (
+                if /i "%%f" neq "run-example.json" (
+                    findstr /i /c "ABSOLUTE/PATH/TO" "config\%%f" >nul 2>&1
+                    if errorlevel 1 set CFG=config\%%f
+                )
+            )
+        )
+        if defined CFG echo no config named "%~1" in config\ - using the newest, %CFG%
+    )
 ) else (
     rem The template is not a run config: skip it when picking one by itself.
     for /f "delims=" %%f in ('dir /b /o-d config\run-*.json 2^>nul') do (

@@ -43,6 +43,16 @@ pick_config() {
     for c in "$1" "$CFG_DIR/$1" "$CFG_DIR/run-$1" "$CFG_DIR/$1.json" "$CFG_DIR/run-$1.json"; do
       if [ -f "$c" ]; then printf '%s\n' "$c"; return 0; fi
     done
+    # The name matches nothing. That is usually a mistyped version or a stray argument
+    # (run.sh 8081), not a machine with nothing built on it: taking the newest run config
+    # keeps the engine running rather than starting the app engineless and reporting
+    # "no engine was asked for" for a model that is sitting in engine/.
+    for c in $(ls -t "$CFG_DIR"/run-*.json 2>/dev/null | grep -v 'run-example\.json'); do
+      if ! is_template "$c"; then
+        echo "no config named '$1' in $CFG_DIR/ - using the newest, $c" >&2
+        printf '%s\n' "$c"; return 0
+      fi
+    done
     return 1
   fi
   for c in $(ls -t "$CFG_DIR"/run-*.json 2>/dev/null | grep -v 'run-example\.json'); do
