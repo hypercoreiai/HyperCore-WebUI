@@ -54,9 +54,10 @@ class StandingTasks(unittest.TestCase):
         gitignored), so a fresh clone cannot be checked against them: they are only
         checked when the box running the test has them.
         """
+        machine_local = ("data/history/", ".mcp_test_state.json")
         for fragment in TASK_1 + TASK_2:
             path = ROOT / fragment
-            if fragment.startswith("data/history/") and not path.exists():
+            if fragment.startswith(machine_local) and not path.exists():
                 continue
             if fragment.endswith("/"):
                 self.assertTrue(path.is_dir(), f"{fragment} is not a directory here")
