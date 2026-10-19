@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""serve/flood_stub.py - the HTTP face the load test talks to, without a model pack.
+"""tools/flood_stub.py - the HTTP face the load test talks to, without a model pack.
 
 Why this exists: tools/bench_flood.py measures the process boundary - slot saturation,
 503 shedding, slot reclamation after a client hangs up. None of those properties belong
@@ -20,8 +20,8 @@ It is a thin adapter over HyperCoreProcessSupervisor and nothing else. When a pa
 present, run bench_flood against serve/server.py instead (--server); the assertions are
 identical because the shedding is done by the worker, not by the HTTP layer.
 
-Run: python3 serve/flood_stub.py --port 8133 --slots 4
-     python3 serve/flood_stub.py --port 8133 --slots 4 --api-key secret
+Run: python3 tools/flood_stub.py --port 8133 --slots 4
+     python3 tools/flood_stub.py --port 8133 --slots 4 --api-key secret
 """
 from __future__ import annotations
 
@@ -35,11 +35,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serve.http_auth import auth_error, key_matches
 from serve.engine_supervisor import (
     HyperCoreProcessSupervisor,
     WorkerBusy,
 )
+from serve.http_auth import auth_error, key_matches
 from serve.ipc_parser import STREAM_TERMINAL, STREAM_TOKEN
 
 STREAM_PATH = "/infer/stream"

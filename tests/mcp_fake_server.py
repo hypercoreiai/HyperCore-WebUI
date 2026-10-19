@@ -1,7 +1,7 @@
-"""serve/mcp_fake_server.py - a small MCP server for serve/test_mcp.py (no MCP SDK, no network beyond localhost).
+"""tests/mcp_fake_server.py - a small MCP server for the hub contract tests (no MCP SDK, no network beyond localhost).
 
-    python serve/mcp_fake_server.py                  stdio: JSON-RPC lines on stdin/stdout
-    python serve/mcp_fake_server.py --http 8765      Streamable HTTP on 127.0.0.1:8765/mcp
+    python tests/mcp_fake_server.py                  stdio: JSON-RPC lines on stdin/stdout
+    python tests/mcp_fake_server.py --http 8765      Streamable HTTP on 127.0.0.1:8765/mcp
 
 Tools: echo (returns its text), fail (a tool error, isError), sleep (answers after `seconds`), big (`n` characters),
 die (the process exits mid-call), add (two integers).  tools/list pages two tools at a time (`--page N`), so the

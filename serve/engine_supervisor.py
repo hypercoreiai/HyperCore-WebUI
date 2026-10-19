@@ -820,7 +820,7 @@ class HyperCoreProcessSupervisor:
         The worker's CAPS reply says how many slots an instance has and never which
         request took which one - the choice is made inside the engine - so the host can
         report how many slots are busy and what each busy one is doing, not their
-        identity. That is the same rule serve/flood_stub.py's /slots already follows
+        identity. That is the same rule tools/flood_stub.py's /slots already follows
         (`is_processing: i < in_flight`); the difference is that every entry here carries
         a state, because serve/server.py sums on it.
         """

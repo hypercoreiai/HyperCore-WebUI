@@ -4,7 +4,7 @@ transports (stdio and Streamable HTTP).
 
     python3 -m unittest serve.mcp.tests.test_hub
 
-These tests use serve/mcp_fake_server.py, a dependency-free stdio/HTTP MCP server, so no
+These tests use tests/mcp_fake_server.py, a dependency-free stdio/HTTP MCP server, so no
 real server, GPU, or internet is involved: everything runs against localhost.
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ from serve.mcp import (
 from serve.mcp.tests.harness import REPO, case
 
 SERVER = "hub"
-FAKE = str(REPO / "serve" / "mcp_fake_server.py")
+FAKE = str(REPO / "tests" / "mcp_fake_server.py")
 PY = sys.executable
 FAKE_TOOLS = ["add", "big", "die", "echo", "fail", "sleep"]
 

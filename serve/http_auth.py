@@ -2,7 +2,7 @@
 """serve/http_auth.py - the API-key gate, defined once.
 
 Two HTTP fronts answer the same question, "may this request in?". serve/server.py answers
-it for every route a client uses; serve/flood_stub.py answers it for the load test that
+it for every route a client uses; tools/flood_stub.py answers it for the load test that
 runs in CI without a model pack. When the rule is written twice it drifts - one front
 accepts "Bearer", the other only "bearer"; one compares in constant time, the other does
 not - and then a pass on the stub is no longer evidence about the real server. The stub is

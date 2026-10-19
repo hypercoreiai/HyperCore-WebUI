@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""serve/frame_fixture.py - a mock worker that speaks the binary protocol.
+"""tests/frame_fixture.py - a mock worker that speaks the binary protocol.
 
 The old integration tests mocked the engine by pushing text lines into `engine.lines`.
 That mock is gone with the text protocol, so the tests need something that produces the

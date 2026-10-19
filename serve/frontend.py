@@ -4,7 +4,7 @@ Everything here is text: no model, no GPU. The engine consumes token ids and pro
 
   * normalizes OpenAI Chat Completions and Anthropic Messages requests into the chat template's message form,
   * renders the model's own Jinja chat template (pack `tokenizer/chat_template.jinja`) exactly as Hugging Face
-    does (checked against the pack's `chat_golden.json`, 10 cases incl. thinking and tools),
+    does (checked against the pack's `tests/chat_golden.json`, 10 cases incl. thinking and tools),
   * parses the streamed output incrementally into reasoning (`<think>...</think>`), content and tool calls in
     the template's XML form (`<tool_call><function=NAME><parameter=P>VALUE</parameter>...</function></tool_call>`),
     never emitting a partial tag to the client.

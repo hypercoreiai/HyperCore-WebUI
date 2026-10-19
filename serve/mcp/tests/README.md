@@ -42,7 +42,7 @@ when nothing failed or errored; a skipped case is not a failure.
 
 Nothing here touches the real `/home`, the real downloads folder, or a running chat: each
 server is started with its root pointed at a temporary directory (`HYPERCORE_DOCS_ROOT`,
-`HYPERCORE_RAG_ROOT`, `SCRAPE_DIR`, `TERMINAL_ROOT`). The hub tests use `serve/mcp_fake_server.py`,
+`HYPERCORE_RAG_ROOT`, `SCRAPE_DIR`, `TERMINAL_ROOT`). The hub tests use `tests/mcp_fake_server.py`,
 a dependency-free MCP server, and the scrape tests fetch from a fixture server on localhost.
 
 `HYPERCORE_TEST_LIVE=0` (or `--no-live`) skips the cases that need the internet or Firefox.

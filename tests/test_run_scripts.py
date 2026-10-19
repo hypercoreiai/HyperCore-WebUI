@@ -127,7 +127,7 @@ class FreshCloneStartTests(unittest.TestCase):
     def server_call(self, d: Path, *args: str) -> tuple[int, str, str]:
         proc = subprocess.run(["sh", str(d / "run.sh"), *args], capture_output=True,
                               text=True, cwd=d, timeout=20, check=False)
-        line = next((l for l in proc.stdout.splitlines() if l.startswith("server:")), "")
+        line = next((item for item in proc.stdout.splitlines() if item.startswith("server:")), "")
         # stderr too: a decision the entry point took with a warning is still a decision.
         return proc.returncode, line, proc.stdout + proc.stderr
 
@@ -191,7 +191,7 @@ class ScratchIsolationTests(unittest.TestCase):
     def test_no_runtime_module_walks_the_scratch_folder(self) -> None:
         runtime = ["serve/server.py", "serve/direct_engine.py", "serve/engine_supervisor.py",
                   "serve/attached_engine.py", "serve/offline_engine.py", "serve/frontend.py",
-                  "serve/monitor_demo.py", "serve/telemetry.py"]
+                  "tools/monitor_demo.py", "serve/telemetry.py"]
         offenders = []
         for name in runtime:
             text = (ROOT / name).read_text(encoding="utf-8")

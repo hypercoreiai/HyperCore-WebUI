@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """serve/http_origin.py - which Host and which Origin a request may come from, defined once.
 
-serve/server.py enforces this on every route; serve/flood_stub.py is the standing CI target
+serve/server.py enforces this on every route; tools/flood_stub.py is the standing CI target
 that has to enforce the same thing. Two copies of a policy drift the same way two copies of
 the key check did: one front accepts a rebinding page, the other does not, and then a pass on
 the stub is no longer evidence about the server. The auth gate was already shared
@@ -41,7 +41,8 @@ def lan_addresses() -> list[str]:
             ips.add(info[4][0])
     except OSError:
         pass
-    ok = lambda ip: ip and not ip.startswith(("127.", "169.254.", "0."))
+    def ok(ip: str) -> bool:
+        return bool(ip) and not ip.startswith(("127.", "169.254.", "0."))
     return ([first] if ok(first) else []) + sorted(ip for ip in ips if ok(ip) and ip != first)
 
 

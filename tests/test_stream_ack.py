@@ -13,14 +13,14 @@ Two things follow, and both are tested here:
   * the supervisor reads a reply whose frames precede the ack instead of failing on it,
     so a worker built before the fix still answers.
 
-No GPU, no subprocess: serve/frame_fixture.py is a socketpair speaking the real framing.
+No GPU, no subprocess: tests/frame_fixture.py is a socketpair speaking the real framing.
 """
 from __future__ import annotations
 
 import unittest
 
 from serve.engine_supervisor import HyperCoreProcessSupervisor, WorkerRejected
-from serve.frame_fixture import ScriptedWorker
+from tests.frame_fixture import ScriptedWorker
 from serve.ipc_parser import CMD_CANCEL, CMD_SUBMIT, STREAM_TERMINAL, STREAM_TOKEN
 
 

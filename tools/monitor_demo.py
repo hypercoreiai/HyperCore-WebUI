@@ -6,7 +6,7 @@ ScriptedWorker that reports prompt reuse, expert-cache hits, PCIe share, prompt 
 RAM/file blob counters, and the expert-tier CAPS fields, then makes one request and
 prints the /metrics row that the Recent requests table consumes.
 
-    python3 serve/monitor_demo.py --port 8080
+    python3 tools/monitor_demo.py --port 8080
 
 Then open http://127.0.0.1:8080/#monitor and send a chat message.
 """
@@ -20,9 +20,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serve.frame_fixture import ScriptedWorker
-from serve.frontend import ChatTemplate
 from serve.engine_supervisor import HyperCoreProcessSupervisor
+from tests.frame_fixture import ScriptedWorker
+from serve.frontend import ChatTemplate
 from serve.server import ByteTokenizer, HyperCoreRequestHandler, Service, serve
 
 
