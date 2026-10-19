@@ -48,12 +48,22 @@ class StandingTasks(unittest.TestCase):
             self.assertIn(fragment, text, f"task 2 must name {fragment}")
 
     def test_every_path_a_task_names_is_real(self):
-        """A standing task the model cannot act on is worse than no standing task."""
+        """A standing task the model cannot act on is worse than no standing task.
+
+        The transcript archive and the notes folder are machine-local (data/* is
+        gitignored), so a fresh clone cannot be checked against them: they are only
+        checked when the box running the test has them.
+        """
         for fragment in TASK_1 + TASK_2:
+            path = ROOT / fragment
+            if fragment.startswith("data/history/") and not path.exists():
+                continue
             if fragment.endswith("/"):
-                self.assertTrue((ROOT / fragment).is_dir(), f"{fragment} is not a directory here")
+                self.assertTrue(path.is_dir(), f"{fragment} is not a directory here")
             else:
-                self.assertTrue((ROOT / fragment).is_file(), f"{fragment} is not a file here")
+                self.assertTrue(path.is_file(), f"{fragment} is not a file here")
+        self.assertTrue((ROOT / "tools" / "build_history.py").is_file(),
+                        "the distiller task names a tool that is not in the repository")
 
     def test_the_rendered_system_prompt_is_not_cut_off(self):
         system = prompts.catalog(prompts.find_prompt_file(ROOT))["system"]

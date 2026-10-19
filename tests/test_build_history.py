@@ -79,6 +79,10 @@ class PathTests(unittest.TestCase):
         self.assertEqual(relocate("check ~HyperCore-Tune-maya for the sweep code"),
                          f"check {PROJECT / 'optuna_tune'} for the sweep code")
 
+    @unittest.skipUnless(
+        (PROJECT / "data" / "history" / "_old_chats").is_dir(),
+        "the transcript archive is machine-local (data/* is gitignored): a fresh clone has none"
+    )
     def test_every_rewritten_path_exists_on_this_machine(self) -> None:
         for alias in ("~/black_box/serve", "~/HyperCore-Tune-maya", "~/black_box_chats",
                       "~/Strata-data", "~/Strata"):
