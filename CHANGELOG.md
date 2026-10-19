@@ -28,7 +28,24 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   a subfolder the clone kept (`data/experimental-speed-projection/`), not the top of the
   data folder with the file name put back on it; two files carrying the same name are not
   resolved by guessing. A path that already exists on this box is left as the user left it.
-- **A fresh clone starts the app**: with nothing installed yet `run.sh` and `run.bat`
+- **The clone a build used is kept**: `clean_tmp()` no longer deletes
+  `tmp/strata-<version>`; the source stays in `tmp/` so the next build of the same
+  release reuses it instead of cloning again, and the merge below has something to
+  merge. A second build of the same tag re-enters the existing clone.
+- **The clone's `data/` is merged into the project's `data/`**: `merge_data()` copies
+  every file the release ships that the project does not already have. A name that
+  already exists with different contents is skipped, never overwritten; identical
+  files are counted as the same. The build reports `merged data/: N file(s)`.
+- **An engineless start adopts the engine a build produces**: `--ui-only` now installs
+  a `DeferredEngine` instead of nothing, so the Load button and the retry thread read
+  the active run config, find the engine the Build tab just stored (worker or bare
+  `strata`), and start it without restarting the server. When it cannot, the reason is
+  the engine's own words, and the retry keeps trying.
+- **The ack and the reply that arrives before it**: the engine bridge in this build
+  runs a request inside `submit()`, so every stream frame of the reply is on the wire
+  before the ack. The supervisor reads those frames instead of failing with "expected
+  an ack frame, got 4", and treats a late ack as a rejection only when nothing has
+  streamed yet.
   do not exit, they serve the page with no engine. The Build tab is what produces the
   first engine and the first run config, so a page that never starts cannot build one.
   An engine that is present is still started, a real run config is still used, and
