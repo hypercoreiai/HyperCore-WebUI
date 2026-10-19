@@ -5559,7 +5559,7 @@ def engine_from_active_config() -> Any | None:
         worker = str(Path(run_cfg.get("cwd") or ".").resolve() / worker)
     if Path(worker).is_file():
         try:
-            return HyperCoreProcessSupervisor(
+            supervisor = HyperCoreProcessSupervisor(
                 worker_binary=worker,
                 socket_path=unique_socket_path("hypercore-worker"),
                 config=hypercore_worker_config(run_cfg, raw),
@@ -5570,6 +5570,10 @@ def engine_from_active_config() -> Any | None:
             )
         except (ValueError, OSError):
             return None
+        # The Engine surface the server uses is the adapter, not the process owner: the
+        # same wrapper main() builds. The supervisor has no status() and no max_context of
+        # its own - those are the adapter's, and the health route reads them.
+        return HyperCoreRequestHandler(supervisor)
     from serve.direct_engine import DirectEngine      # imported here, as the other build paths do
     return DirectEngine(exe, run_cfg.get("args") or [],
                         startup_timeout_s=model_startup_s(run_cfg),

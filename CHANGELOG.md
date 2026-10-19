@@ -213,6 +213,18 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   banner and `reason_code()` still read `ui_only`. `tests/test_offline_engine.py` has four
   cases for the delegation, and the before/after behaviour is checked against a fixture
   root: nothing before a build, the worker supervisor after one.
+- **The health route describes an engine that cannot describe itself.** After a build the
+  engine came up and `/health` raised `AttributeError: 'HyperCoreProcessSupervisor' object
+  has no attribute 'status'` on every request: `DeferredEngine.status()` passed the call
+  straight on to the delegate, and neither the worker supervisor nor the request handler over
+  it has a `status()` - only `alive()`. `engine_from_active_config()` now returns the same
+  adapter `main()` builds (`HyperCoreRequestHandler`, which is where `max_context` and the
+  Monitor fields come from), and `DeferredEngine.status()` keeps the offline shape the banner
+  and `/health` read: what the delegate can say is merged into it, and the state is taken
+  from `alive()` when it cannot say anything. A delegate that fails to describe itself is a
+  bad description, not a dead engine. An engine that is brought up through `restart()` (the
+  worker adapter, which has no `start()`) is brought up that way. `tests/test_offline_engine.py`
+  has six cases for the delegation.
 - **The banner's red button stops the engine, not the app.** It reads "Stop Engine", arms
   on the first click ("Confirm") and stops the model, the image encoder and the MCP
   servers on the second (`POST /v1/stop`, the engine-only pair that already existed for

@@ -144,7 +144,14 @@ class DeferredEngine(OfflineEngine):
                 self.last_error = ("nothing has been built yet: build an engine, or start "
                                    "this server again with a run config")
                 raise EngineUnavailable(self.last_error, self.retry_after_s)
-        self.engine.start()
+        # Which way an engine is brought up depends on which engine the run config names:
+        # serve/direct_engine.py exposes start(), while the worker adapter
+        # HyperCoreRequestHandler exposes restart() and does the READY handshake inside it.
+        begin = getattr(self.engine, "start", None) or getattr(self.engine, "restart", None)
+        if not callable(begin):
+            self.last_error = "the engine the run config names cannot be started"
+            raise EngineUnavailable(self.last_error, self.retry_after_s)
+        begin()
         self.model = getattr(self.engine, "model", self.model) or self.model
         self.max_context = int(getattr(self.engine, "max_context", 0) or 0)
         return self.engine
@@ -175,9 +182,44 @@ class DeferredEngine(OfflineEngine):
             self.engine.shutdown()
 
     def status(self) -> dict[str, Any]:
-        if self.engine is not None:
-            return self.engine.status()
-        return super().status()
+        """What the engine behind it can say, in the shape the health route reads.
+
+        `OfflineEngine.status()` is the shape the banner and `/health` read, and a real
+        engine is not obliged to answer in it: the worker supervisor and the request handler
+        over it have no `status()` at all - only `alive()`. So whatever the delegate can say
+        is merged into this shape, and the state is taken from `alive()` when it cannot say
+        anything. A delegate that cannot describe itself is not an error: the health route
+        must still answer.
+        """
+        base = super().status()
+        if self.engine is None:
+            return base
+        reported = self._delegate_words()
+        base.update(reported)
+        base["max_context"] = self.max_context      # what the delegate was read as at build()
+        state = reported.get("state") or ("running" if self.alive() else "offline")
+        base["state"] = state
+        if state != "offline":
+            # The stand-in's own cause is not the engine's: once weights are behind it the
+            # reason is the engine, in its own words if it has them.
+            base["code"] = reported.get("code") or "running"
+            base["reason"] = reported.get("reason") or "the engine the build produced is running"
+        return base
+
+    def _delegate_words(self) -> dict[str, Any]:
+        """The delegate's own status, if it has one. Never raises: a description that fails
+        must not take the health route down with it, and the state is still known from
+        `alive()`.
+        """
+        speak = getattr(self.engine, "status", None)
+        if not callable(speak):
+            return {}
+        try:
+            said = speak()
+        except Exception as exc:  # noqa: BLE001 - a delegate that cannot describe itself
+            self.last_error = f"the engine could not describe itself: {exc}"
+            return {}
+        return dict(said) if isinstance(said, dict) else {}
 
 
 class EngineRetry:

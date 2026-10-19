@@ -434,6 +434,74 @@ class DeferredEngineTests(unittest.TestCase):
                          "the server now answers for the engine the build produced")
         self.assertEqual(snapshot["attempts"], 1, "one attempt, and it found the build")
 
+    class WorkerAdapter:
+        """The shape the run-config read gives back for a worker build: the request handler
+        over the supervisor. It has no status() - at best a monitor snapshot - and it is
+        brought up through restart(), not start()."""
+        def __init__(self) -> None:
+            self.model = "Qwen2-7B-Q2_0"
+            self.max_context = 4096
+            self.started = False
+
+        def restart(self) -> bool:
+            self.started = True
+            return True
+
+        def alive(self) -> bool:
+            return self.started
+
+        def generate(self, prompt: str, **kw: Any) -> list[str]:
+            return ["an answer from the built engine"]
+
+        def unload(self) -> bool:
+            return False
+
+        def shutdown(self) -> None:
+            pass
+
+    def test_an_engine_that_cannot_describe_itself_is_still_reported(self) -> None:
+        """The build's engine has no status(); the stand-in must describe it from alive().
+
+        This is the failure the health route hit after a build: /health called
+        DeferredEngine.status(), which passed the call straight on to the delegate and
+        raised AttributeError on a method the worker adapter does not have.
+        """
+        adapter = DeferredEngineTests.WorkerAdapter()
+        deferred = DeferredEngine(lambda: adapter, "started with --ui-only: no engine was asked for")
+        self.assertTrue(deferred.restart(), "the adapter is brought up through restart()")
+        state = deferred.status()
+        self.assertEqual(state["state"], "running")
+        self.assertEqual(state["code"], "running",
+                         "the cause of a stand-in is not the cause of an engine that is running")
+        self.assertEqual(state["model"], adapter.model)
+        self.assertEqual(state["max_context"], 4096)
+        self.assertEqual(deferred.generate("hello"), ["an answer from the built engine"])
+
+    def test_a_delegate_that_cannot_describe_itself_does_not_take_the_health_route_down(self) -> None:
+        """A status() that fails is a bad description, not a dead engine."""
+        class Loud:
+            def status(self) -> dict:
+                raise RuntimeError("the worker is not answering")
+
+            def alive(self) -> bool:
+                return True
+
+        loud = Loud()
+        deferred = DeferredEngine(lambda: loud, "started with --ui-only: no engine was asked for")
+        deferred.restart()
+        state = deferred.status()
+        self.assertEqual(state["state"], "running", "the engine is up; only its words failed")
+        self.assertIn("could not describe itself", deferred.last_error)
+
+    def test_the_run_config_read_returns_the_adapter_the_startup_path_uses(self) -> None:
+        """The same object main() builds, not the process owner by itself."""
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "serve" / "server.py").read_text(encoding="utf-8")
+        body = source[source.index("def engine_from_active_config"):source.index("def main")]
+        self.assertIn("return HyperCoreRequestHandler(supervisor)", body,
+                      "the run-config read returns the process owner, which has no status() "
+                      "and no max_context for the health route and the Monitor to read")
+
     def test_the_engineless_server_is_given_a_candidate(self) -> None:
         """Without a candidate the retry is never created, and a build can never be adopted."""
         root = Path(__file__).resolve().parents[1]
