@@ -569,6 +569,42 @@ class RunConfigTests(unittest.TestCase):
         self.assertEqual(written, str(quant_store.data_dir("q2_0") / "expert-profile.bin"),
                          "the config for q2_0 still pointed at another build's data folder")
 
+    def test_a_runtime_file_stored_in_a_subfolder_is_pointed_at_where_it_is(self) -> None:
+        """The build keeps the shape of the clone's data folder, so a file can be nested.
+
+        The speed projection ships under `data/experimental-speed-projection/` and the
+        engine reads it by name with a weight suffix (`file.gguf:1.0`). Pointing at the top
+        of the data folder with the name put back on it names a file that is not there.
+        """
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        sub = clone / "data" / "experimental-speed-projection"
+        sub.mkdir(parents=True)
+        (sub / "speed-projection.gguf").write_bytes(b"projection")
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--control-vector-scaled", "/ABSOLUTE/PATH/TO/speed-projection.gguf:1.0"]
+        (self.config / "run-q2_0.json").write_text(json.dumps(cfg), encoding="utf-8")
+        path, _ = quant_store.ensure_run_config("q2_0", source_root=clone)
+        written = json.loads(path.read_text())["args"][1]
+        self.assertEqual(written, str(quant_store.data_dir("q2_0") / "experimental-speed-projection"
+                                    / "speed-projection.gguf") + ":1.0",
+                         "a runtime file the build stored in a subfolder was pointed at as if "
+                         "it were at the top of the data folder")
+
+    def test_two_runtime_files_with_the_same_name_are_not_a_guess(self) -> None:
+        """The file at the top of the data folder is the one the engine reads by name."""
+        clone = quant_store.TMP_DIR / "strata-v0.1.45"
+        sub = clone / "data" / "experimental-speed-projection"
+        sub.mkdir(parents=True)
+        (sub / "speed-projection.gguf").write_bytes(b"nested")
+        (clone / "data" / "speed-projection.gguf").write_bytes(b"the one read by name")
+        cfg = json.loads(self.BASE)
+        cfg["args"] = ["--control-vector-scaled", "/ABSOLUTE/PATH/TO/speed-projection.gguf:1.0"]
+        (self.config / "run-q2_0.json").write_text(json.dumps(cfg), encoding="utf-8")
+        path, _ = quant_store.ensure_run_config("q2_0", source_root=clone)
+        written = json.loads(path.read_text())["args"][1]
+        self.assertEqual(written, str(quant_store.data_dir("q2_0") / "speed-projection.gguf") + ":1.0",
+                         "two files carrying the same name were resolved by guessing")
+
     def test_a_model_path_is_not_treated_as_a_runtime_data_file(self) -> None:
         """A pack or a model shard is filled from the data area, not from the build."""
         clone = quant_store.TMP_DIR / "strata-v0.1.45"

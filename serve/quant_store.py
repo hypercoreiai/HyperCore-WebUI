@@ -508,13 +508,21 @@ def point_data_at_build(cfg: dict[str, Any], key: Any) -> list[str]:
     is recognised as well as a real path. A path that already exists on this box is left
     as it is - the file the user installed elsewhere is theirs - unless it points at
     another engine build's data folder, which is a stale pointer from an earlier build.
+    The pointer names where the file actually is: `carry_data_dir` keeps the shape of the
+    clone's data folder, so a runtime file can sit in a subfolder of it (the speed
+    projection is under `data/experimental-speed-projection/`), and the match is the path
+    the build stored rather than the top of the data folder with the name put back on it.
     A model path (a pack, a model shard, an mtp folder) is not touched here,
     `repair_model_paths` owns those. Returns what changed.
     """
     stored = data_dir(key)
     if not stored.is_dir():
         return []
-    names = {p.name.lower() for p in stored.rglob("*") if p.is_file()}
+    # name -> the files of this build carrying that name, in a stable order.
+    found: dict[str, list[Path]] = {}
+    for p in sorted(stored.rglob("*")):
+        if p.is_file():
+            found.setdefault(p.name.lower(), []).append(p)
     changes: list[str] = []
     here = stored.resolve().relative_to(ENGINE_DIR)
 
@@ -534,9 +542,19 @@ def point_data_at_build(cfg: dict[str, Any], key: Any) -> list[str]:
     def fix(value: str) -> str:
         file_part, tail = (value.split(":", 1) + [""])[:2]
         name = Path(file_part).name.lower()
-        if name not in names:
+        matches = found.get(name)
+        if not matches:
             return value
-        target = stored / Path(file_part).name
+        if len(matches) > 1:
+            # Two runtime files carrying the same name are not a guess. The one at the top
+            # of the data folder is the one the engine reads by name; anything else is left
+            # as the config named it.
+            top = [m for m in matches if m.parent == stored]
+            if not top:
+                return value
+            target = top[0]
+        else:
+            target = matches[0]
         if _exists(value) and not other_build(value):
             return value
         out = f"{target}{(':' + tail) if tail else ''}"

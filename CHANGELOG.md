@@ -21,6 +21,13 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   engine argument names is checked before the process is spawned, and an engine that
   exits is reported in its own words - a missing model shard is called a missing
   model shard, not a memory problem.
+- **The runtime files a build ships are stored and pointed at**: the Build tab carries the
+  clone's whole `data/` into `engine/engine_<quant>/data/` for every quant, and the run
+  config's data paths (`expert-profile.bin`, the draft vocab, the speed projection) are
+  repointed at those copies. The pointer names where the file actually is, including inside
+  a subfolder the clone kept (`data/experimental-speed-projection/`), not the top of the
+  data folder with the file name put back on it; two files carrying the same name are not
+  resolved by guessing. A path that already exists on this box is left as the user left it.
 - **A fresh clone starts the app**: with nothing installed yet `run.sh` and `run.bat`
   do not exit, they serve the page with no engine. The Build tab is what produces the
   first engine and the first run config, so a page that never starts cannot build one.
