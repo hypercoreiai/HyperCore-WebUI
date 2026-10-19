@@ -341,7 +341,12 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   above those lines says why and how to raise it.
 - **Windows**: `run.bat`, `setup.bat`, `tools/build_engine.bat`.
 - **Tests**: `tools/run_tests.sh` runs the pytest suite and the browser-free JS
-  checks that read `serve/web/app.js` as text.
+  checks that read `serve/web/app.js` as text. `pytest.ini` scopes collection to `tests/`:
+  the Strata clone that loop 41 leaves in `tmp/` carries its own test files, and those
+  import `tools/_paths.py`, which calls `sys.exit()` when llama.cpp's gguf-py is not on the
+  box - a bare `pytest` from the repo root stopped with a collection error before it reached
+  anything of this project's. `tests/test_pytest_scope.py` keeps the scope and checks that
+  nothing inside `tests/` needs gguf-py, so the scope is not hiding a dependency.
 - **README**: each tab is described and then shown, with the screenshots in
   `data/media/` (the only files under `data/` that are committed).
 - **Standing tasks in the system prompt** (`prompts/prompt.json`, v9): every chat
