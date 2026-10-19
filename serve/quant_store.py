@@ -218,6 +218,29 @@ def _file_info(path: Path) -> dict[str, Any]:
         return {"path": str(path), "bytes": 0, "sha256": ""}
 
 
+#: The marker the shipped template uses for every path it cannot know: a config that
+#: still contains it has never been filled in, so it is a shape, not a model version.
+TEMPLATE_MARKER = "ABSOLUTE/PATH/TO"
+
+
+def config_is_template(path: Any) -> bool:
+    """True when a run config is the template rather than a config for a model.
+
+    `run.sh` refuses to pick one for the same reason: its paths are placeholders, and
+    handing it to an engine starts that engine on a file that does not exist - the
+    engine says "missing model shard /ABSOLUTE/PATH/TO/..." and the app reports the
+    engine as unavailable. Readable, unparseable, or missing counts as a template so
+    the caller falls back to something real instead of trusting it.
+    """
+    try:
+        raw = Path(path).read_text(encoding="utf-8-sig") if str(path) else ""
+    except (OSError, ValueError):
+        return True
+    if not raw.strip():
+        return True
+    return TEMPLATE_MARKER in raw
+
+
 def _run_configs() -> list[dict[str, Any]]:
     """config/*.json that are run configs, with the quant each one runs.
 
@@ -237,7 +260,7 @@ def _run_configs() -> list[dict[str, Any]]:
             continue
         if not isinstance(cfg, dict):
             continue
-        if "ABSOLUTE/PATH/TO" in json.dumps(cfg):
+        if TEMPLATE_MARKER in json.dumps(cfg):
             continue
         quant = quant_from_config(cfg)
         out.append({

@@ -22,6 +22,7 @@ Nothing here reads a GPU. The whole module is testable without one.
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable
@@ -158,10 +159,21 @@ class DeferredEngine(OfflineEngine):
         """One attempt: take the engine the run config names now, and start it.
 
         Every failure is written to `last_error`, so the banner and the 503 body say what
-        the engine actually said instead of the reason the server started with. An attempt
-        that gets as far as an engine object keeps it: the next attempt starts that one
-        again rather than building a second copy.
+        the engine actually said instead of the reason the server started with.
+
+        An attempt that got an engine up keeps it: the next attempt starts that one again
+        rather than building a second copy. An attempt that did not get one up is dropped.
+        That is the difference between an engine that is temporarily down and an engine
+        built from a run config that is no longer the one to run: a build writes a new
+        config, and the supervisor behind the old one has spent its restart budget on
+        paths that do not exist, so restarting it repeats the same failure forever.
         """
+        if self.engine is not None and not self.loaded:
+            with contextlib.suppress(Exception):  # a dead engine's own error must not hide the reason
+                shutdown = getattr(self.engine, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
+            self.engine = None
         if self.engine is None:
             try:
                 self.engine = self.factory()

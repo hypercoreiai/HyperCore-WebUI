@@ -40,7 +40,15 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   a `DeferredEngine` instead of nothing, so the Load button and the retry thread read
   the active run config, find the engine the Build tab just stored (worker or bare
   `strata`), and start it without restarting the server. When it cannot, the reason is
-  the engine's own words, and the retry keeps trying.
+  the engine's own words, and the retry keeps trying. Two things had to be fixed for
+  that to actually load the model on a fresh clone: on a machine with nothing built the
+  startup discovery has no run config to pick and falls back to the template, so the
+  deferred read now recognises a template (`ABSOLUTE/PATH/TO` in it, the same rule
+  `run.sh` uses) and reads it as no config at all - the active build's config is used
+  instead of starting the engine on `/ABSOLUTE/PATH/TO/models/...`; and an attempt that
+  failed no longer keeps its engine, so the next attempt re-reads the run config rather
+  than restarting the same supervisor whose restart budget was spent on paths that do
+  not exist.
 - **The ack and the reply that arrives before it**: the engine bridge in this build
   runs a request inside `submit()`, so every stream frame of the reply is on the wire
   before the ack. The supervisor reads those frames instead of failing with "expected

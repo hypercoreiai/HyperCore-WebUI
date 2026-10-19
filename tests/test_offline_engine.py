@@ -447,6 +447,49 @@ class DeferredEngineTests(unittest.TestCase):
                          "the server now answers for the engine the build produced")
         self.assertEqual(snapshot["attempts"], 1, "one attempt, and it found the build")
 
+    class Broken:
+        """An engine built from a config whose paths are still placeholders."""
+        def __init__(self) -> None:
+            self.shutdown_called = False
+
+        def start(self) -> None:
+            raise RuntimeError("missing model shard /ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf")
+
+        def alive(self) -> bool:
+            return False
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    def test_an_attempt_that_failed_re_reads_the_run_config(self) -> None:
+        """The retry after a failure asks the factory again, instead of restarting the dead engine.
+
+        The first attempt of an engineless server reads the config it was started with -
+        on a fresh clone, the template. That engine cannot come up, and the supervisor
+        behind it spends its restart budget on paths that do not exist. Keeping it means
+        every later attempt restarts the same dead process and the model never loads, even
+        though a build has since written a config with real paths.
+        """
+        good = DeferredEngineTests.Built()
+        attempts = {"n": 0}
+
+        def factory():
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return DeferredEngineTests.Broken()
+            return good
+
+        deferred = DeferredEngine(factory, "started with --ui-only: no engine was asked for")
+        with self.assertRaises(EngineUnavailable):
+            deferred.start()
+        self.assertFalse(deferred.alive())
+        self.assertIn("missing model shard", deferred.last_error,
+                      "the banner says what the engine said, not why the server started")
+        self.assertTrue(deferred.restart(), "the retry kept the engine from the failed attempt")
+        self.assertTrue(deferred.alive())
+        self.assertEqual(deferred.generate("hello"), ["an answer from the built engine"])
+        self.assertEqual(attempts["n"], 2, "the retry did not re-read the run config")
+
     class WorkerAdapter:
         """The shape the run-config read gives back for a worker build: the request handler
         over the supervisor. It has no status() - at best a monitor snapshot - and it is
@@ -664,6 +707,30 @@ class RunConfigReadTests(unittest.TestCase):
         self.assertIsNone(engine_from_active_config())
         self.run_config("q2_0", self.engine_dir / "engine_q2_0" / "strata")   # no build folder
         self.assertIsNone(engine_from_active_config())
+
+    def test_the_template_is_read_as_no_config_at_all(self) -> None:
+        """A server started engineless is given the template for its defaults.
+
+        That is the path the --ui-only retry took on a fresh clone: with nothing built,
+        the startup discovery has no run config to pick and falls back to
+        config/run-example.json. Handing its placeholders to an engine starts it on
+        "missing model shard /ABSOLUTE/PATH/TO/...", and every retry repeats it - the
+        build finished, and the app still refused the model. The read ignores a template
+        and takes the config the build wrote.
+        """
+        template = self.config_dir / "run-example.json"
+        template.write_text(json.dumps({
+            "exe": "engine/engine_q2_0/strata",
+            "args": ["--native", "/ABSOLUTE/PATH/TO/models/Q2_0/model-00001-of-00002.gguf"],
+            "model_name": "q2_0",
+        }), encoding="utf-8")
+        self.assertIsNone(engine_from_active_config(str(template)),
+                         "the template's placeholder paths were handed to an engine")
+        self.run_config("q2_0", self.build("q2_0"))
+        engine = engine_from_active_config(str(template))
+        self.assertIsInstance(engine, DirectEngine, "the build's config was not adopted")
+        self.assertEqual(engine.args[1], str(self.engine_dir / "engine_q2_0" / "strata"),
+                         "the engine still runs on the template's placeholders")
 
 
 class _Responder:

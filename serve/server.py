@@ -5575,6 +5575,13 @@ def engine_from_active_config(config_path: str | None = None, own_port: int | No
     a different one. Not given (a fresh clone, or a --ui-only start with no config) means
     the version the store says is active.
 
+    A config that is still the template is not a config for a model: its paths are
+    placeholders. A server started on a machine with nothing built has no run config to
+    pick, so the startup discovery falls back to `config/run-example.json` for the app's
+    defaults, and handing that to an engine starts it on "missing model shard
+    /ABSOLUTE/PATH/TO/..." for as long as it is retried. A template is read like no config
+    at all: the active build's config is used instead.
+
     `own_port` is the port this web app is listening on. Given, an engine already up on
     the machine is adopted over HTTP rather than started a second time, exactly as the
     startup path does; the server's own port is never a candidate, so a deferred engine
@@ -5583,7 +5590,7 @@ def engine_from_active_config(config_path: str | None = None, own_port: int | No
     """
     run_cfg: dict[str, Any] | None = None
     raw = ""
-    if config_path:
+    if config_path and not quant_store.config_is_template(config_path):
         try:
             raw = Path(config_path).read_text(encoding="utf-8-sig")
             run_cfg = json.loads(raw)
