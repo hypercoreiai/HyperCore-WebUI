@@ -12,12 +12,13 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -25,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 from unittest.mock import patch
 
 from serve import quant_store, server
+from serve.attached_engine import AttachedEngine
 from serve.direct_engine import DirectEngine
 from serve.offline_engine import (
     UNLOADED_CODE,
@@ -570,8 +572,13 @@ class DeferredEngineTests(unittest.TestCase):
         branch = source[source.index("if a.ui_only:"):]
         self.assertIn("engine_candidate, engine_unavailable = engine, engine.reason", branch,
                       "an engineless server has no candidate, so a build cannot be adopted")
-        self.assertIn("DeferredEngine(engine_from_active_config", branch,
+        self.assertIn("DeferredEngine(deferred_engine", branch,
                       "the engineless server is not asked to read the run config again")
+        self.assertIn("engine_from_active_config(a.config", branch,
+                      "a server started with a run config adopts a different model instead")
+        self.assertIn("own_port=None if a.no_attach else a.port", branch,
+                      "--no-attach is ignored by the deferred engine, which could attach to "
+                      "the web app it is running in")
 
 
 class RunConfigReadTests(unittest.TestCase):
@@ -657,6 +664,211 @@ class RunConfigReadTests(unittest.TestCase):
         self.assertIsNone(engine_from_active_config())
         self.run_config("q2_0", self.engine_dir / "engine_q2_0" / "strata")   # no build folder
         self.assertIsNone(engine_from_active_config())
+
+
+class _Responder:
+    """A port that answers /health, so the attach check has something to look at."""
+
+    def __init__(self, payload: dict) -> None:
+        import http.server
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: Any) -> None:   # keep the test output clean
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_port
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
+class EngineIsLoadedTests(unittest.TestCase):
+    """A port that answers is an engine only if a model is loaded behind it."""
+
+    ENGINELESS: ClassVar[dict[str, Any]] = {"status": "offline", "max_context": 0, "loaded": False, "service": "hypercore",
+                  "engine": {"state": "offline", "code": "ui_only",
+                             "reason": "started with --ui-only: no engine was asked for"}}
+    LOADED: ClassVar[dict[str, Any]] = {"status": "ok", "max_context": 4096, "loaded": True, "service": "hypercore"}
+
+    def test_a_web_app_without_weights_is_not_an_engine(self) -> None:
+        self.assertFalse(server.engine_is_loaded(json.dumps(self.ENGINELESS)),
+                         "an engineless web app was read as an engine: it would attach to itself")
+
+    def test_a_loaded_model_is(self) -> None:
+        self.assertTrue(server.engine_is_loaded(json.dumps(self.LOADED)))
+
+    def test_a_context_is_enough_even_when_loaded_is_not_said(self) -> None:
+        self.assertTrue(server.engine_is_loaded(json.dumps({"max_context": 2048})))
+
+    def test_a_body_that_is_not_json_is_read_as_text(self) -> None:
+        self.assertFalse(server.engine_is_loaded('"max_context": 0'))
+        self.assertTrue(server.engine_is_loaded('"status": "ok"'))
+
+    def test_the_probe_only_answers_when_a_model_is_loaded(self) -> None:
+        engine_up = _Responder(self.LOADED)
+        web_app = _Responder(self.ENGINELESS)
+        try:
+            self.assertEqual(server.find_running_engine({"port": engine_up.port}, 0, ports=(engine_up.port,)),
+                             f"http://127.0.0.1:{engine_up.port}")
+            self.assertIsNone(server.find_running_engine({"port": web_app.port}, 0, ports=(web_app.port,)),
+                             "the probe took the engineless web app for an engine")
+            self.assertIsNone(server.find_running_engine({"port": web_app.port}, web_app.port,
+                                                         ports=(web_app.port,)),
+                             "the probe answered on the port this server is listening on")
+        finally:
+            engine_up.stop()
+            web_app.stop()
+
+
+class DeferredEngineFailureTests(unittest.TestCase):
+    """A build that produced an engine which will not start says so, in the engine's words."""
+
+    class Refusing:
+        def __init__(self) -> None:
+            self.detail = "the card is held by the sweep: stop it and try again"
+            self.model = "Qwen2-7B-Q2_0"
+            self.max_context = 4096
+
+        def start(self) -> None:
+            raise RuntimeError("hypercore_worker: engine init failed (-5)")
+
+        def alive(self) -> bool:
+            return False
+
+    def test_the_reason_is_the_engine_error_not_the_startup_reason(self) -> None:
+        deferred = DeferredEngine(lambda: self.Refusing(),
+                                 "started with --ui-only: no engine was asked for")
+        self.assertFalse(deferred.restart())
+        self.assertIn("engine init failed", deferred.last_error)
+        self.assertIn("sweep", deferred.detail, "the engine's own words were dropped")
+        self.assertEqual(deferred.status()["reason"], deferred.last_error,
+                         "the banner still said the server was started engineless")
+
+    def test_a_chat_refused_after_a_failed_attempt_says_why(self) -> None:
+        deferred = DeferredEngine(lambda: self.Refusing(),
+                                 "started with --ui-only: no engine was asked for")
+        deferred.restart()
+        with self.assertRaises(EngineUnavailable) as got:
+            deferred.generate("hello")
+        self.assertIn("engine init failed", str(got.exception),
+                      "the user was sent to a build that has already been made")
+        self.assertEqual(got.exception.retry_after, deferred.retry_after_s,
+                         "the 503 carried no Retry-After for the next attempt")
+
+    def test_a_factory_that_raises_is_an_attempt_not_a_crash(self) -> None:
+        def broken() -> Any:
+            raise OSError("config/run-q2_0.json is not valid JSON")
+        deferred = DeferredEngine(broken, "started with --ui-only: no engine was asked for")
+        with self.assertRaises(EngineUnavailable) as got:
+            deferred.build()          # the attempt itself; the retry thread catches it
+        self.assertIn("not valid JSON", deferred.last_error)
+        self.assertIn("not valid JSON", str(got.exception),
+                      "the 503 did not carry what the read failed on")
+        self.assertFalse(deferred.restart(), "the retry thread must not see a crash")
+        self.assertFalse(deferred.alive())
+
+
+class DeferredAttachTests(unittest.TestCase):
+    """After a build the deferred engine takes the engine there is, not a second copy."""
+
+    LOADED: ClassVar[dict[str, Any]] = {"status": "ok", "max_context": 4096, "loaded": True, "model": "Qwen2-7B-q2_0"}
+    ENGINELESS: ClassVar[dict[str, Any]] = {"status": "offline", "max_context": 0, "loaded": False}
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.config_dir = self.root / "config"
+        self.engine_dir = self.root / "engine"
+        self.config_dir.mkdir()
+        self.engine_dir.mkdir()
+        self.patchers = [
+            patch.object(quant_store, "ROOT", self.root),
+            patch.object(server, "ROOT", self.root),   # engine_binary's engine/strata fallback
+            patch.object(quant_store, "CONFIG_DIR", self.config_dir),
+            patch.object(quant_store, "ENGINE_DIR", self.engine_dir),
+            patch.object(quant_store, "INDEX_PATH", self.root / "engine" / "VERSIONS.json"),
+            patch.object(server, "worker_binary_path", lambda root=None: str(self.root / "no-worker")),
+            patch.object(server, "USUAL_ENGINE_PORTS", ()),   # only the fixture's port is probed
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self) -> None:
+        for p in self.patchers:
+            p.stop()
+        self.tmp.cleanup()
+
+    def build(self, quant: str) -> Path:
+        folder = self.engine_dir / f"engine_{quant}"
+        folder.mkdir(parents=True, exist_ok=True)
+        exe = folder / "strata"
+        exe.write_text("#!/bin/sh\n", encoding="utf-8")
+        return exe
+
+    def run_config(self, quant: str, exe: Path, port: int | None = None) -> Path:
+        path = self.config_dir / f"run-{quant}.json"
+        cfg = {"model_name": f"Qwen2-7B-{quant}", "cwd": str(self.root),
+              "exe": str(exe), "args": [], "worker": str(self.root / "no-worker")}
+        if port:
+            cfg["port"] = port
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        return path
+
+    def test_an_engine_already_up_on_the_machine_is_adopted(self) -> None:
+        other = _Responder(self.LOADED)
+        self.run_config("q2_0", self.build("q2_0"), port=other.port)
+        try:
+            engine = engine_from_active_config(own_port=8143, api_key="secret")
+        finally:
+            other.stop()
+        self.assertIsInstance(engine, AttachedEngine,
+                             "a second copy was started while an engine was already running")
+        self.assertEqual(engine.base, f"http://127.0.0.1:{other.port}")
+        self.assertEqual(engine.api_key, "secret")
+
+    def test_the_server_is_never_attached_to_itself(self) -> None:
+        """The only thing answering is this web app's own port: build the engine instead."""
+        itself = _Responder(self.ENGINELESS)
+        self.run_config("q2_0", self.build("q2_0"), port=itself.port)
+        try:
+            engine = engine_from_active_config(own_port=itself.port)
+        finally:
+            itself.stop()
+        self.assertNotIsInstance(engine, AttachedEngine,
+                                "the deferred engine became the web app it is running in")
+        self.assertIsInstance(engine, DirectEngine)
+
+    def test_no_port_given_is_no_attach_check(self) -> None:
+        """A read with no server yet cannot know which port is its own, so it builds."""
+        other = _Responder(self.LOADED)
+        self.run_config("q2_0", self.build("q2_0"))
+        try:
+            engine = engine_from_active_config()
+        finally:
+            other.stop()
+        self.assertIsInstance(engine, DirectEngine)
+
+    def test_the_config_the_server_was_started_with_is_the_one_adopted(self) -> None:
+        """A server named for a model does not adopt another model's engine."""
+        self.run_config("q2_0", self.build("q2_0"))          # the store has an active model
+        empty = self.config_dir / "run-offline-test.json"
+        empty.write_text(json.dumps({"model_name": "offline-test"}), encoding="utf-8")
+        engine = engine_from_active_config(str(empty))
+        self.assertIsNone(engine, "the deferred engine took the store's model over the one "
+                                  "this server was started with")
 
 
 if __name__ == "__main__":

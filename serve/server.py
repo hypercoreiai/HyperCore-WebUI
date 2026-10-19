@@ -5455,16 +5455,44 @@ def engine_url(cfg: dict, given: str | None) -> str | None:
     return None
 
 
-def find_running_engine(cfg: dict, own_port: int) -> str | None:
+# The ports an engine is usually on, tried after the port the run config names.
+USUAL_ENGINE_PORTS = (8080, 8081, 8095)
+
+
+def engine_is_loaded(body: str) -> bool:
+    """Does a /health answer say a model is loaded behind it?
+
+    "answers at all" is not enough. An engineless WebUI answers the same route with
+    `"max_context": 0`, so a server that attaches to the first thing that replies can
+    end up attached to itself: the "engine" is then this very WebUI, every chat request
+    is refused by the same refusal, and the banner never clears. The JSON is read, not
+    grepped, so the check is the answer's own claim of a loaded model.
+    """
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return '"status": "ok"' in body or '"loaded": true' in body
+    if not isinstance(data, dict):
+        return False
+    context = data.get("max_context")
+    return bool(data.get("loaded")) or (isinstance(context, int) and context > 0)
+
+
+def find_running_engine(cfg: dict, own_port: int,
+                        ports: tuple[int, ...] | None = None) -> str | None:
     """Is an engine already up on this machine?
 
     A second copy of the same model would not fit, so before starting one the server
     asks the port the config names (and the usual ones) for a /health. The first one
-    that answers is the engine to attach to.
+    that answers with a loaded model is the engine to attach to.
+
+    `ports` overrides which ports are tried; it is there so a test can point the probe
+    at one port instead of the machine's usual ones.
     """
     import socket
-    ports = [p for p in (cfg.get("port"), 8080, 8081, 8095) if isinstance(p, int) and p != own_port]
-    for port in dict.fromkeys(ports):
+    wanted = list(ports) if ports else [cfg.get("port"), *USUAL_ENGINE_PORTS]
+    candidates = [p for p in wanted if isinstance(p, int) and p != own_port]
+    for port in dict.fromkeys(candidates):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=3.0) as s:
                 s.sendall(b"GET /health HTTP/1.0\r\n\r\n")
@@ -5478,7 +5506,7 @@ def find_running_engine(cfg: dict, own_port: int) -> str | None:
                 body = raw.decode("utf-8", "replace")
         except OSError:
             continue
-        if '"status": "ok"' in body or '"max_context"' in body:
+        if engine_is_loaded(body):
             return f"http://127.0.0.1:{port}"
     return None
 
@@ -5527,7 +5555,8 @@ def resolve_turn_tail(cli_flag: bool, cfg: dict, env: dict[str, str] | None = No
     return bool(cli_flag or cfg.get("turn_tail_check") is True)
 
 
-def engine_from_active_config() -> Any | None:
+def engine_from_active_config(config_path: str | None = None, own_port: int | None = None,
+                              api_key: str = "", tokenizer: Any = None) -> Any | None:
     """The engine the active run config names now, or None while nothing is there.
 
     A server started engineless reads the run config once, at startup, and never again: a
@@ -5540,16 +5569,43 @@ def engine_from_active_config() -> Any | None:
     the way the startup path builds it; otherwise the engine is run directly. Returns None
     while there is no run config or no engine binary - that is not an error, it is the
     state before the first build.
+
+    `config_path` is the run config this server was started with. Given, it is the one to
+    re-read: a build rewrites it, and a server named for a model should not silently pick
+    a different one. Not given (a fresh clone, or a --ui-only start with no config) means
+    the version the store says is active.
+
+    `own_port` is the port this web app is listening on. Given, an engine already up on
+    the machine is adopted over HTTP rather than started a second time, exactly as the
+    startup path does; the server's own port is never a candidate, so a deferred engine
+    can never become the web app it is running in. Not given (a read with no server yet, or
+    a --no-attach start) means no attach check.
     """
-    configs = quant_store._run_configs()
-    if not configs:
-        return None
-    active = quant_store.index().get("active")
-    chosen = next((c for c in configs if c["quant"] == active), configs[0])
-    try:
-        raw = Path(chosen["path"]).read_text(encoding="utf-8-sig")
-        run_cfg = json.loads(raw)
-    except (OSError, ValueError):
+    run_cfg: dict[str, Any] | None = None
+    raw = ""
+    if config_path:
+        try:
+            raw = Path(config_path).read_text(encoding="utf-8-sig")
+            run_cfg = json.loads(raw)
+        except (OSError, ValueError):
+            run_cfg = None
+    if run_cfg is None:
+        configs = quant_store._run_configs()
+        if not configs:
+            return None
+        active = quant_store.index().get("active")
+        chosen = next((c for c in configs if c["quant"] == active), configs[0])
+        try:
+            raw = Path(chosen["path"]).read_text(encoding="utf-8-sig")
+            run_cfg = json.loads(raw)
+        except (OSError, ValueError):
+            return None
+    if not run_cfg.get("exe") and not run_cfg.get("worker"):
+        # Nothing in the config names an engine. `engine_binary` would hand back this
+        # project's engine/strata - the fallback for a machine where one was installed by
+        # hand - but a deferred engine is asked for because a build produced one, and a
+        # config that names nothing is the state before the first build, not an engine to
+        # adopt. Adopting it would load a model the person never asked for.
         return None
     exe = engine_binary(run_cfg)
     if not exe or not Path(exe).is_file():
@@ -5558,6 +5614,12 @@ def engine_from_active_config() -> Any | None:
         # here even though nothing is on disk. The read is asked at attempt time: an engine
         # that is not there is the state before the first build, not an engine to adopt.
         return None
+    if own_port is not None:
+        url = find_running_engine(run_cfg, own_port)
+        if url:
+            from serve.attached_engine import AttachedEngine
+            return AttachedEngine(url, api_key=api_key, tokenizer=tokenizer,
+                                  model=run_cfg.get("model_name") or "")
     worker = run_cfg.get("worker") or worker_binary_path()
     if not Path(worker).is_absolute():
         worker = str(Path(run_cfg.get("cwd") or ".").resolve() / worker)
@@ -5711,7 +5773,22 @@ def main() -> int:
         sampling_defaults = sampling_defaults_from_config(cfg)
         effort_end = None
 
-        engine = DeferredEngine(engine_from_active_config,
+        def deferred_engine() -> Any | None:
+            """What this install can run now, read at the moment it is asked for.
+
+            A server started engineless read its run config once, at startup, and never
+            looked again: a build that put an engine in engine/engine_<quant>/ was invisible
+            until the server was started by hand. This is read on every attempt, so the
+            build is adopted without taking the web app down - and an engine already up on
+            the machine is attached to rather than started a second time, with this server's
+            own port excluded so the engine can never be the web app itself.
+            """
+            return engine_from_active_config(a.config,
+                                            own_port=None if a.no_attach else a.port,
+                                            api_key=a.api_key or cfg.get("api_key", ""),
+                                            tokenizer=tok)
+
+        engine = DeferredEngine(deferred_engine,
                                "started with --ui-only: no engine was asked for",
                                model=cfg.get("model_name") or "no model loaded")
         engine_candidate, engine_unavailable = engine, engine.reason

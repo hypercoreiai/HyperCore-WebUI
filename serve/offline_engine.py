@@ -85,8 +85,21 @@ class OfflineEngine:
         self.model = model or "no model loaded"
         self.max_context = int(max_context)
         self.retry_after_s = float(retry_after_s)
+        #: What the most recent attempt said, in the engine's own words. Empty until an
+        #: attempt has been made: until then the only reason there is is the one the
+        #: server started with.
+        self.last_error: str = ""
         self.info: dict[str, Any] = {}
         self.started_at = time.time()
+
+    def report(self) -> str:
+        """The reason to show a person: what the last attempt said, or the startup reason.
+
+        "started with --ui-only" is true at the moment the server binds, but it stops
+        being the useful sentence the moment an attempt has failed for a specific reason:
+        the banner, the 503 body and the Monitor all read this instead of `reason`.
+        """
+        return self.last_error or self.reason
 
     # ---------------------------------------------------------------- Engine protocol
     def generate(self, *args: Any, **kwargs: Any) -> Any:
@@ -135,14 +148,31 @@ class DeferredEngine(OfflineEngine):
         super().__init__(reason, model=model, retry_after_s=retry_after_s)
         self.factory = factory
         self.engine: Any = None
+        #: True only while an engine behind this object has been started and is up. An
+        #: attempt that got as far as an engine object but could not start it leaves this
+        #: False, so a chat is refused with that attempt's reason rather than reaching a
+        #: half-built engine.
+        self.loaded = False
 
     def build(self) -> Any:
-        """One attempt: take the engine the run config names now, and start it."""
+        """One attempt: take the engine the run config names now, and start it.
+
+        Every failure is written to `last_error`, so the banner and the 503 body say what
+        the engine actually said instead of the reason the server started with. An attempt
+        that gets as far as an engine object keeps it: the next attempt starts that one
+        again rather than building a second copy.
+        """
         if self.engine is None:
-            self.engine = self.factory()
+            try:
+                self.engine = self.factory()
+            except Exception as exc:  # a failed read is an attempt, not a crash
+                self.last_error = str(exc) or "the run config could not be read"
+                self.detail = self.last_error
+                raise EngineUnavailable(self.last_error, self.retry_after_s) from exc
             if self.engine is None:
                 self.last_error = ("nothing has been built yet: build an engine, or start "
                                    "this server again with a run config")
+                self.detail = self.reason
                 raise EngineUnavailable(self.last_error, self.retry_after_s)
         # Which way an engine is brought up depends on which engine the run config names:
         # serve/direct_engine.py exposes start(), while the worker adapter
@@ -151,7 +181,15 @@ class DeferredEngine(OfflineEngine):
         if not callable(begin):
             self.last_error = "the engine the run config names cannot be started"
             raise EngineUnavailable(self.last_error, self.retry_after_s)
-        begin()
+        try:
+            begin()
+        except Exception as exc:  # the engine's own reason is what to report
+            self.loaded = False
+            self.last_error = str(exc) or "the engine did not come up"
+            said = getattr(self.engine, "detail", None) or getattr(self.engine, "death_note", None)
+            self.detail = str(said) or self.last_error
+            raise EngineUnavailable(self.last_error, self.retry_after_s) from exc
+        self.loaded = True
         self.model = getattr(self.engine, "model", self.model) or self.model
         self.max_context = int(getattr(self.engine, "max_context", 0) or 0)
         return self.engine
@@ -170,8 +208,11 @@ class DeferredEngine(OfflineEngine):
         return bool(engine.alive())
 
     def generate(self, *args: Any, **kwargs: Any) -> Any:
-        if self.engine is None:
-            raise EngineUnavailable(self.reason, self.retry_after_s)
+        if self.engine is None or not self.loaded:
+            # The reason an attempt failed is more use than the reason the server started
+            # with: a chat refused with "no engine was asked for" after a build has just
+            # produced one sends the user to the wrong place.
+            raise EngineUnavailable(self.report(), self.retry_after_s)
         return self.engine.generate(*args, **kwargs)
 
     def unload(self) -> bool:
@@ -192,6 +233,12 @@ class DeferredEngine(OfflineEngine):
         must still answer.
         """
         base = super().status()
+        #: The reason the health route and the banner show is the reason this object has to
+        #: give: the startup sentence until an attempt has been made, then whatever that
+        #: attempt said. "no engine was asked for" is not the fact once one has been asked
+        #: for and failed.
+        base["reason"] = self.report()
+        base["code"] = reason_code(base["reason"])
         if self.engine is None:
             return base
         reported = self._delegate_words()
@@ -339,6 +386,9 @@ class EngineRetry:
             else:
                 self.last_error = _brief(getattr(self.candidate, "last_error", None)
                                         or "the engine did not come up")
+                said = getattr(self.candidate, "detail", None)
+                if said:
+                    self.detail = str(said)
         except Exception as exc:  # noqa: BLE001 - a retry must never take the server with it
             self.detail = str(exc)
             self.last_error = _brief(str(exc))
@@ -371,6 +421,10 @@ class EngineRetry:
                     return
                 self.last_error = _brief(getattr(self.candidate, "last_error", None)
                                         or "the engine did not come up")
+                said = getattr(self.candidate, "detail", None)
+                if said:
+                    # The engine's own words, not the reason this server started with.
+                    self.detail = str(said)
             except Exception as exc:  # noqa: BLE001 - a retry must never take the server with it
                 self.detail = str(exc)
                 self.last_error = _brief(str(exc))
