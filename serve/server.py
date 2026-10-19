@@ -5578,7 +5578,8 @@ def engine_from_active_config() -> Any | None:
         # same wrapper main() builds. The supervisor has no status() and no max_context of
         # its own - those are the adapter's, and the health route reads them.
         return HyperCoreRequestHandler(supervisor)
-    from serve.direct_engine import DirectEngine      # imported here, as the other build paths do
+    # imported here, as the other build paths do
+    from serve.direct_engine import DirectEngine
     return DirectEngine(exe, run_cfg.get("args") or [],
                         startup_timeout_s=model_startup_s(run_cfg),
                         env=child_env(run_cfg), log_path=run_cfg.get("log"))
