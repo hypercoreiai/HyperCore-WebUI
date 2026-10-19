@@ -1,0 +1,31 @@
+[project]
+name = "hypercore-webui"
+version = "0.1.0"
+description = "HyperCore web app (Chat, Assist, Monitor, Tune, Build, About) over a Strata engine."
+requires-python = ">=3.11"
+
+# No build system: the app is run from source (run.sh / run.bat), not installed.
+
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+extend-exclude = ["tmp", "engine", "engine-src", ".venv", "optuna_tune/results", "optuna_tune/history"]
+
+[tool.ruff.lint]
+# The rule set the code passes today, so the gate in .github/workflows/ci.yml is green and
+# stays green. E501 is off because the docstrings in this project are long by design (the
+# longest line in serve/ is 348 characters). E402 is off because serve/server.py and several
+# tools put a directory on sys.path before importing from it, which is deliberate.
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["E501", "E402"]
+
+[tool.mypy]
+# 3.12, not 3.11: numpy 2.5.3's stubs use the `type` statement, and at python_version 3.11
+# mypy stops on that stub before it has read a single file of this project
+# ("Found 1 error in 1 file (errors prevented further checking)"). At 3.12 it checks all 81
+# source files. The project still runs on 3.11; nothing in serve/ or tools/ uses 3.12 syntax.
+python_version = "3.12"
+ignore_missing_imports = true
+# Advisory in CI, not a gate: serve/ has 268 errors in 31 files as of this writing
+# (verified with `mypy --ignore-missing-imports serve tools`).
+check_untyped_defs = false

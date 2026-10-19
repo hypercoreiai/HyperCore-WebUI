@@ -1,0 +1,5 @@
+# Tools the tests and the CI gate need. Install with:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest>=8.0
+ruff>=0.16
+mypy>=1.12

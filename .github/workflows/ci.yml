@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # The gate. Nothing here needs a GPU or a model pack.
+      - name: Lint
+        run: ruff check serve tools optuna_tune tests conftest.py
+
+      - name: Python tests
+        run: python -m pytest -q
+
+      - name: Browser-free JS tests
+        run: |
+          for f in tests/*.js; do node "$f"; done
+
+      # Advisory: serve/ still carries ~260 type errors. Running it every time shows the
+      # trend without turning the pipeline red on a legacy backlog.
+      - name: Type check (advisory)
+        continue-on-error: true
+        run: mypy --ignore-missing-imports serve tools

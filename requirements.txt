@@ -1,16 +1,24 @@
-# The WebUI itself needs only these.
-jinja2>=3.1
-requests>=2.31
-psutil>=5.9
-pillow>=10
-pyyaml>=6.0
-regex
-numpy
-tqdm
+# The WebUI itself needs only these. Lower bounds are the oldest versions this project
+# has been tested against; the box this was written on runs the versions in brackets.
+jinja2>=3.1          # 3.1.6
+requests>=2.31       # 2.32.5
+psutil>=5.9          # 7.1.0
+pillow>=10           # 12.1.1
+pyyaml>=6.0          # 6.0.3
+regex>=2024.5        # 2026.9.29
+numpy>=1.26          # 2.5.3
+tqdm>=4.65           # 4.70.1
 
-# Build tab: cmake and ninja are used to compile a Strata release.
-cmake
-ninja
+# Build tab: cmake and ninja are used to compile a Strata release. Only needed if they
+# are not already on the machine (cmake 4.2.3 and ninja 1.13 are here, so this box does
+# not need the wheels). The pip wheels are the fallback for a bare Windows box.
+cmake>=3.24
+ninja>=1.11
+
+# Stealth browser (optional): serve/mcp/browser_mcp.py opens the C++-patched Firefox
+# from invisible-playwright, then Camoufox, then stock Playwright Firefox. The first
+# run downloads a ~260 MB sealed Firefox into ~/.cache/invisible-playwright.
+# invisible-playwright
 
 # Tune tab (optional): install these to run a sweep.
 # optuna

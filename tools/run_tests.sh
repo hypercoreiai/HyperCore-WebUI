@@ -3,18 +3,31 @@
 #
 #   ./tools/run_tests.sh
 #
-# Two suites: the Python tests (pytest) and the browser-free JS tests, which read
-# serve/web/app.js and index.html as text and check the behaviour of the parts that
-# change their own labels - the Stop/Start pair, the two-click Shut Down, the
-# surface slider, the token-prefix folding. Node is only needed for the second.
+# Three suites: the lint gate, the Python tests (pytest, which now also collects the MCP
+# contract tests under serve/mcp/tests), and the browser-free JS tests, which read
+# serve/web/app.js and index.html as text and check the behaviour of the parts that change
+# their own labels - the Stop/Start pair, the two-click Shut Down, the surface slider, the
+# token-prefix folding. Node is only needed for the last one.
 cd "$(dirname "$0")/.."
 PY=".venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
 fail=0
 
+echo "== lint =="
+if command -v ruff >/dev/null 2>&1; then
+  if ruff check serve tools optuna_tune tests conftest.py; then
+    echo "ruff: ok"
+  else
+    echo "ruff: FAILED"
+    fail=1
+  fi
+else
+  echo "ruff is not installed; the lint gate was skipped (pip install -r requirements-dev.txt)"
+fi
+
 echo "== python =="
-if "$PY" -m pytest tests/ -q; then
+if "$PY" -m pytest -q; then
   echo "python: ok"
 else
   echo "python: FAILED"
