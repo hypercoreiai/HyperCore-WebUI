@@ -5552,7 +5552,11 @@ def engine_from_active_config() -> Any | None:
     except (OSError, ValueError):
         return None
     exe = engine_binary(run_cfg)
-    if not exe:
+    if not exe or not Path(exe).is_file():
+        # engine_binary hands back the path the config names without looking at it, so an
+        # absolute exe left by another install, or by a build that was cleaned, comes back
+        # here even though nothing is on disk. The read is asked at attempt time: an engine
+        # that is not there is the state before the first build, not an engine to adopt.
         return None
     worker = run_cfg.get("worker") or worker_binary_path()
     if not Path(worker).is_absolute():

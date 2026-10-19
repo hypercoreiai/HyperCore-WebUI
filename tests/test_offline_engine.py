@@ -23,6 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serve.offline_engine import (DeferredEngine, EngineRetry, EngineUnavailable, OfflineEngine)
+from serve.server import HyperCoreRequestHandler, engine_from_active_config
+from serve.direct_engine import DirectEngine
+from serve import quant_store, server
+from unittest.mock import patch
 
 FAKE_ENGINE = """#!/bin/sh
 # A stand-in for the Strata engine, speaking the control protocol serve/direct_engine.py
@@ -511,6 +515,91 @@ class DeferredEngineTests(unittest.TestCase):
                       "an engineless server has no candidate, so a build cannot be adopted")
         self.assertIn("DeferredEngine(engine_from_active_config", branch,
                       "the engineless server is not asked to read the run config again")
+
+
+class RunConfigReadTests(unittest.TestCase):
+    """Which engine an engineless server adopts: engine_from_active_config().
+
+    The fixture is one project root with one run config and one engine build folder, so
+    nothing on this machine decides the answer. The worker branch is the one a real box
+    cannot take by itself - this box has a worker binary - so the fixture says there is
+    no worker, and then puts one in the fixture.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.config_dir = self.root / "config"
+        self.engine_dir = self.root / "engine"
+        self.index_path = self.engine_dir / "VERSIONS.json"
+        self.worker = self.root / "hypercore-worker"
+        self.config_dir.mkdir()          # CONFIG_DIR has to exist: _run_configs reads it
+        self.patchers = [
+            patch.object(quant_store, "CONFIG_DIR", self.config_dir),
+            patch.object(quant_store, "ENGINE_DIR", self.engine_dir),
+            patch.object(quant_store, "INDEX_PATH", self.index_path),
+            patch.object(server, "worker_binary_path", lambda root=None: str(self.worker)),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self) -> None:
+        for p in self.patchers:
+            p.stop()
+        self.tmp.cleanup()
+
+    def build(self, quant: str) -> Path:
+        """engine/engine_<quant>/ with an engine binary in it, as a build leaves it."""
+        folder = self.engine_dir / f"engine_{quant}"
+        folder.mkdir(parents=True)
+        exe = folder / "strata"
+        exe.write_text("#!/bin/sh\n", encoding="utf-8")
+        return exe
+
+    def run_config(self, quant: str, exe: Path) -> Path:
+        path = self.config_dir / f"run-{quant}.json"
+        path.write_text(json.dumps({
+            "model_name": f"Qwen2-7B-{quant}",
+            "cwd": str(self.root),
+            "exe": str(exe),
+            "args": ["--native", str(exe)],
+            "worker": str(self.worker),
+        }), encoding="utf-8")
+        return path
+
+    def test_a_config_with_no_worker_gives_the_direct_engine(self) -> None:
+        """The fallback branch, which this box cannot reach because it has a worker built."""
+        self.run_config("q2_0", self.build("q2_0"))
+        engine = engine_from_active_config()
+        self.assertIsInstance(engine, DirectEngine,
+                             "no worker in the fixture, so the engine is run directly")
+        self.assertEqual(engine.exe, str(self.engine_dir / "engine_q2_0" / "strata"),
+                         "the engine built is not the engine the read returns")
+
+    def test_a_config_whose_worker_exists_gives_the_adapter(self) -> None:
+        """The same object main() builds: the adapter, not the process owner by itself."""
+        self.run_config("q2_0", self.build("q2_0"))
+        self.worker.write_text("#!/bin/sh\n", encoding="utf-8")
+        engine = engine_from_active_config()
+        self.assertIsInstance(engine, HyperCoreRequestHandler,
+                             "the health route reads status() and max_context off the adapter")
+        self.assertEqual(engine.supervisor.worker_binary, str(self.worker))
+
+    def test_the_version_the_index_calls_active_is_the_one_adopted(self) -> None:
+        """Two builds on disk: the read follows the active one, not the first config file."""
+        self.run_config("q2_0", self.build("q2_0"))
+        self.run_config("iq2_xs", self.build("iq2_xs"))
+        self.index_path.write_text(json.dumps({"active": "iq2_xs", "versions": {}}), encoding="utf-8")
+        engine = engine_from_active_config()
+        self.assertIsInstance(engine, DirectEngine)
+        self.assertEqual(engine.exe, str(self.engine_dir / "engine_iq2_xs" / "strata"),
+                         "the read took a config the Model version dropdown is not on")
+
+    def test_nothing_built_yet_is_not_an_error(self) -> None:
+        """Before the first build there is no config and no binary: that is the state, not a failure."""
+        self.assertIsNone(engine_from_active_config())
+        self.run_config("q2_0", self.engine_dir / "engine_q2_0" / "strata")   # no build folder
+        self.assertIsNone(engine_from_active_config())
 
 
 if __name__ == "__main__":

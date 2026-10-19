@@ -896,5 +896,51 @@ class MergeDataTests(unittest.TestCase):
                         "the build merges data/ after the clone is gone")
 
 
+class ReusedCloneTests(unittest.TestCase):
+    """A build that finds its clone already in tmp/ uses it instead of failing."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved = build_api.TMP_DIR
+        build_api.TMP_DIR = self.tmp / "tmp"
+        self.clone = build_api.TMP_DIR / "strata-v0.1.45"
+        (self.clone / ".git").mkdir(parents=True)
+        self.job = StubBuild([0, 0])
+
+    def tearDown(self) -> None:
+        build_api.TMP_DIR = self.saved
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_clone_is_fetched_and_reset_to_the_tag(self) -> None:
+        """The build is still honest about which version it is building: the tag is
+        fetched again and the tree is reset to it, not simply reused as it stands."""
+        self.assertTrue(self.job.reuse_clone(self.clone, "v0.1.45"))
+        self.assertEqual(self.job.calls[0][:3], ["git", "-C", str(self.clone)])
+        self.assertEqual(self.job.calls[0][3:5], ["fetch", "--depth"])
+        self.assertEqual(self.job.calls[1][3:5], ["checkout", "-f"])
+
+    def test_a_folder_that_is_not_a_checkout_is_not_built_from(self) -> None:
+        """tmp/ can hold a tree left by an older run; it is not a clone."""
+        stray = build_api.TMP_DIR / "strata-main"
+        stray.mkdir()
+        self.assertFalse(self.job.reuse_clone(stray, "main"))
+        self.assertEqual(self.job.calls, [], "a tree it cannot identify was used anyway")
+
+    def test_a_failed_fetch_is_not_followed_by_a_checkout(self) -> None:
+        job = StubBuild([1])
+        self.assertFalse(job.reuse_clone(self.clone, "v0.1.45"))
+        self.assertEqual(len(job.calls), 1, "the checkout ran after a fetch that failed")
+
+    def test_the_build_reuses_the_clone_it_finds(self) -> None:
+        """The clone step has to take the reuse path when the folder is already there."""
+        source = (ROOT / "serve" / "build_api.py").read_text(encoding="utf-8")
+        body = source[source.index("def _run("):]
+        self.assertIn("if clone.is_dir():", body, "an existing clone is not recognised")
+        self.assertLess(body.index("self.reuse_clone(clone, tag)"),
+                        body.index('raise RuntimeError("git clone failed")'),
+                        "the build still clones over a checkout it already has")
+        self.assertIn("reused the clone already in tmp/", body,
+                      "a build that reused a clone does not say so in the log")
+
 if __name__ == "__main__":
     unittest.main()

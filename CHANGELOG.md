@@ -72,9 +72,12 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   `rmtree` in `clean_tmp()` is commented out — because the clone's `data/` folder (the
   expert profile, the speed-projection gguf) is what a run config's runtime paths point
   at, and a build that removes the clone removes them with it. Nothing at runtime reads
-  `tmp/`, so a kept clone is only ever used by the next build; a second build of the
-  same tag now finds its own clone there and `git clone` refuses, which is reported as
-  `git clone failed`.
+  `tmp/`, so a kept clone is only ever used by the next build. A build that finds its
+  clone already there uses it again instead of failing: `build_api.reuse_clone()` fetches
+  the tag into that checkout and resets to it, so a rebuild of the same tag is still
+  possible and the build tree inside the clone stays incremental. A folder in `tmp/` that
+  is not a git checkout is not a clone and is named as such rather than built from.
+  `tests/test_build_api.py` `ReusedCloneTests` (4 cases) covers both paths.
 - **A build merges `data/`**: when a from-source build finishes, the clone's `data/`
   folder (the expert profile, the draft vocab, the speed-projection) is merged into the
   project's `data/`, which is where the app keeps its own files, so one folder holds
@@ -211,8 +214,12 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   engine when there is no worker) once the binary is there, so `EngineRetry` is given a
   candidate and the model starts without a restart. The reason string is unchanged, so the
   banner and `reason_code()` still read `ui_only`. `tests/test_offline_engine.py` has four
-  cases for the delegation, and the before/after behaviour is checked against a fixture
-  root: nothing before a build, the worker supervisor after one.
+  cases for the delegation. The read itself is now tested against a fixture root rather
+  than by reading the source: the direct engine when the fixture has no worker, the
+  adapter when it has one, the version the index calls active when two are on disk, and
+  nothing at all before the first build (`RunConfigReadTests`, 4 cases). It also refuses
+  an engine binary the run config names but that is not on disk — that is the state
+  before the first build, not an engine to adopt.
 - **The health route describes an engine that cannot describe itself.** After a build the
   engine came up and `/health` raised `AttributeError: 'HyperCoreProcessSupervisor' object
   has no attribute 'status'` on every request: `DeferredEngine.status()` passed the call

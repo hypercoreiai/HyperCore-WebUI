@@ -632,12 +632,32 @@ class BuildJob:
         """Leave the Strata clone in tmp/ instead of removing it.
 
         The call sites are kept so the build flow is unchanged; the removal itself is
-        commented out. A build that finds its clone already there is the consequence -
-        see the note in the git clone step.
+        commented out. A build that finds its clone already there uses it again - see
+        reuse_clone, which is what makes a rebuild of the same tag possible.
         """
         # for path in TMP_DIR.iterdir():
         #     if path.is_dir() and path.name.startswith("strata-"):
         #         shutil.rmtree(path, ignore_errors=True)
+
+    def reuse_clone(self, clone: Path, tag: str) -> bool:
+        """Use the clone a previous build left in tmp/ instead of cloning it again.
+
+        clean_tmp no longer removes the clone, so a second build of the same tag finds the
+        checkout there and git refuses to clone into a folder that already holds one. The
+        clone is never edited by hand - the build only injects hypercore-interface into it,
+        and that is idempotent - so fetching the tag again and resetting to it is enough,
+        and the build tree inside it is left, so the cmake run stays incremental.
+
+        A folder in tmp/ that is not a git checkout is not a clone: returns False, and the
+        caller names it instead of building from a tree it cannot identify.
+        """
+        if not (clone / ".git").is_dir():
+            return False
+        for cmd in (["git", "-C", str(clone), "fetch", "--depth", "1", "origin", tag],
+                    ["git", "-C", str(clone), "checkout", "-f", tag]):
+            if self.run_stream(cmd) != 0:
+                return False
+        return True
 
     def configured_targets(self, build_dir: Path) -> set[str]:
         """The target names a configured project defines, read from its build.ninja.
@@ -832,13 +852,21 @@ class BuildJob:
 
             self.state = "cloning"
             # clean_tmp no longer removes the clone, so a second build of the same tag
-            # finds it here and git refuses to clone into a folder that already has a
-            # checkout. The build reports that as "git clone failed"; reusing the clone
-            # would be a behaviour change, so it is not done here.
-            code = self.run_stream(["git", "clone", "--depth", "1", "--branch", tag,
-                                   f"https://github.com/{REPO}.git", str(clone)])
-            if code != 0:
-                raise RuntimeError("git clone failed")
+            # finds the checkout already there. It is reused: the clone data/ is what a
+            # run config points at, and git would refuse to clone into a folder that
+            # already holds a checkout, so reuse is the only path that keeps a rebuild of
+            # a tag possible without deleting what was asked to be kept.
+            if clone.is_dir():
+                if not self.reuse_clone(clone, tag):
+                    raise RuntimeError(
+                        f"tmp/{clone.name} is not a git checkout of {REPO}, so this build "
+                        "has nothing to build from")
+                self.log_line(f"reused the clone already in tmp/{clone.name}")
+            else:
+                code = self.run_stream(["git", "clone", "--depth", "1", "--branch", tag,
+                                       f"https://github.com/{REPO}.git", str(clone)])
+                if code != 0:
+                    raise RuntimeError("git clone failed")
 
             # Inject the HyperCore process boundary so the worker targets exist.
             engine_src = ROOT / "engine-src"
