@@ -61,6 +61,9 @@ class ScriptedWorker:
     not serving - the distinction the supervisor has to make without a heartbeat frame.
     `mute_submit` answers no ack to a request at all, standing in for a worker that is
     up but never schedules: the case the ack timeout has to tell apart from a dead link.
+    `sync_submit` runs the request before answering it, the way the engine bridge in this
+    build does: every stream frame of the reply is on the wire before the ack. The
+    supervisor has to read such a reply instead of failing on "expected an ack frame".
     """
 
     def __init__(
@@ -74,6 +77,7 @@ class ScriptedWorker:
         die_after: int | None = None,
         mute_ping: bool = False,
         mute_submit: bool = False,
+        sync_submit: bool = False,
         backend: int = 0,
         max_context: int = 4096,
         pool_workers: int = 4,
@@ -104,6 +108,7 @@ class ScriptedWorker:
         self.die_after = die_after
         self.mute_ping = mute_ping
         self.mute_submit = mute_submit
+        self.sync_submit = sync_submit
         self.backend = backend
         self.max_context = max_context
         self.pool_workers = pool_workers
@@ -251,6 +256,11 @@ class ScriptedWorker:
             # acknowledged, so the supervisor's ack timeout is the only thing it sees.
             time.sleep(0.5)
             self.in_flight -= 1
+            return
+        if self.sync_submit:
+            # The bridge runs the request inside submit(), so the ack comes last.
+            self._run_request(request_id)
+            self._send(RESP_STATUS, request_id, struct.pack("<i", 0))
             return
         self._send(RESP_STATUS, request_id, struct.pack("<i", 0))
         # A real worker runs each request on its own engine thread. The mock has to do the

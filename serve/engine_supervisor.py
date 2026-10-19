@@ -45,6 +45,7 @@ from serve.ipc_parser import (
     CMD_PING,
     CMD_SUBMIT,
     MONITOR_FIELDS,
+    RESP_STATUS,
     STREAM_TERMINAL,
     STREAM_TOKEN,
     HyperCoreIPCListener,
@@ -649,6 +650,7 @@ class HyperCoreProcessSupervisor:
         frames = self.open_stream(request_id)
         terminal_seen = False
         accepted = False
+        streamed = 0              # token frames of this request, for the late-ack rule below
         link_dead = False          # the drain below is only for a link that is still there
         try:
             payload = build_submit_payload(
@@ -679,16 +681,26 @@ class HyperCoreProcessSupervisor:
             if item[0] is None:
                 link_dead = True
                 raise WorkerUnreachable("worker died while scheduling the request")
-            if item[0] != expected_reply(CMD_SUBMIT):
+            if item[0] == expected_reply(CMD_SUBMIT):
+                status = decode_status(item[2]) if len(item[2]) >= 4 else 0
+                if status == -2:
+                    raise WorkerBusy("the worker has no free batch slot")
+                if status != 0:
+                    raise WorkerRejected(f"engine rejected the request: status {status}")
+                accepted = True
+                self.last_frame_at = time.monotonic()
+            elif item[0] in (STREAM_TOKEN, STREAM_TERMINAL):
+                # A stream frame for this request before the ack: the request was taken.
+                # The engine bridge runs a request inside submit(), so with that build
+                # every frame of the reply is on the wire before the ack. Putting the
+                # frame back is the only way to keep it: dropping it loses a token, and
+                # insisting on the ack fails the request ("expected an ack frame, got 4").
+                accepted = True
+                self.last_frame_at = time.monotonic()
+                frames.put(item)
+            else:
                 link_dead = True
                 raise WorkerUnreachable(f"expected an ack frame, got {item[0]}")
-            status = decode_status(item[2])
-            if status == -2:
-                raise WorkerBusy("the worker has no free batch slot")
-            if status != 0:
-                raise WorkerRejected(f"engine rejected the request: status {status}")
-            accepted = True
-            self.last_frame_at = time.monotonic()
 
             while True:
                 # The wall is the silence limit measured from the last frame, not the
@@ -716,7 +728,17 @@ class HyperCoreProcessSupervisor:
                         "worker died mid-stream" + (f": {why}" if why else "")
                     )
                 self.last_frame_at = time.monotonic()
+                if tag == RESP_STATUS:
+                    # The ack of a request whose frames got here first (see above). It
+                    # cannot refuse a request that has already streamed, so it is only a
+                    # rejection when nothing has come through yet.
+                    status = decode_status(frame_payload) if len(frame_payload) >= 4 else 0
+                    if status != 0 and not streamed:
+                        link_dead = True
+                        raise WorkerRejected(f"engine rejected the request: status {status}")
+                    continue
                 if tag == STREAM_TOKEN:
+                    streamed += 1
                     self.note_frame()
                     if token_id >= 0:
                         with self._flight_lock:

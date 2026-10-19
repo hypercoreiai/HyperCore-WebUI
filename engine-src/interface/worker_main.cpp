@@ -180,12 +180,30 @@ void handle_submit(const Header& h, const std::vector<uint8_t>& payload) {
 
     const int32_t* tokens = reinterpret_cast<const int32_t*>(payload.data() + head_size);
 
+    /* The ack goes out BEFORE the request runs.
+     * hypercore_engine_submit() in this bridge runs a request to completion: every token
+     * frame and the terminal frame it produces are written to the socket inside that call.
+     * An ack sent after it therefore reaches the host after the whole reply, and the host
+     * - which is documented to read the ack first (serve/ipc_parser.py, stream() in
+     * serve/engine_supervisor.py) - fails the request with "expected an ack frame, got 4".
+     * The status the host acts on is the one this call can decide now: the framing has
+     * already been checked above, and a live engine takes the request.
+     * If the run itself fails, the terminal frame below closes the stream so the host
+     * does not sit on its silence wall waiting for a request that will never answer. */
+    int32_t status = HYPERCORE_STATUS_SUCCESS;
+    send_frame(RESP_STATUS, h.request_id, &status, sizeof status);
+
     hypercore_status_t st = hypercore_engine_submit(
         g_engine, h.request_id, &config, tokens, static_cast<size_t>(declared_len),
         ipc_stream_callback, reinterpret_cast<void*>(static_cast<uintptr_t>(h.request_id)));
 
-    int32_t status = static_cast<int32_t>(st);
-    send_frame(RESP_STATUS, h.request_id, &status, sizeof status);
+    if (st != HYPERCORE_STATUS_SUCCESS) {
+        uint8_t payload_zero[4 + 68];   /* prompt_reused + a zeroed 68-byte summary */
+        memset(payload_zero, 0, sizeof payload_zero);
+        static constexpr uint32_t wire_summary_size = 68;
+        memcpy(payload_zero + 4, &wire_summary_size, 4);
+        send_frame(STREAM_TERMINAL, h.request_id, payload_zero, sizeof payload_zero);
+    }
 }
 
 void handle_caps(const Header& h) {
