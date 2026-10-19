@@ -90,7 +90,10 @@ class TuneCommand(unittest.TestCase):
         self.assertNotIn("--expert-profile", cmd)
         self.assertNotIn("--load", cmd)
         self.assertIn("--no-load", tune_api.build_command({"model": "q2_0", "fresh": True}))
-        self.assertIn("expert_profile", tune_api.engine_paths("q2_0"))
+        # 'example' is the shipped template (config/run-example.json is the only run
+        # config in the repository); a real model's config is machine-local and may
+        # not exist on the box running the test.
+        self.assertIn("expert_profile", tune_api.engine_paths("example"))
 
     def test_the_pin_boxes_are_filled_from_the_search_space(self):
         options = tune_api.pin_options()
