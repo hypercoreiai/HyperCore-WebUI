@@ -204,7 +204,42 @@ class DeferredEngine(OfflineEngine):
             # reason is the engine, in its own words if it has them.
             base["code"] = reported.get("code") or "running"
             base["reason"] = reported.get("reason") or "the engine the build produced is running"
+            return base
+        # An engine has been taken and it is not up. The sentence this object was built
+        # with - "no engine was asked for" - is no longer the fact: an engine was asked
+        # for, and it is not running. Say what that engine says; keep this object's own
+        # reason only for the case where it cannot say anything, which is the state the
+        # banner and the tab mapping still describe.
+        note = self._delegate_note()
+        if note:
+            base["detail"] = note
+            base["reason"] = _brief(note)
+            base["code"] = reported.get("code") or reason_code(note)
         return base
+
+    def _delegate_note(self) -> str:
+        """The last thing the engine said, for a delegate that has no `status()`.
+
+        The worker adapter and the supervisor behind it expose `death_note()`/`last_stderr()`
+        instead of a status, and that is the only account a process that exited during
+        startup can give. Read in that order, and never raises: a note that cannot be read
+        is skipped, and the health route still answers with what it has.
+        """
+        for name in ("death_note", "last_stderr", "last_error"):
+            said = self._read_words(getattr(self.engine, name, None))
+            if said:
+                return said
+        return ""
+
+    @staticmethod
+    def _read_words(source: Any) -> str:
+        """Call it if it can be called, read it if it is a string. A note that cannot be
+        read is skipped, not an error: the health route must still answer."""
+        try:
+            value = source() if callable(source) else source
+        except Exception:  # noqa: BLE001 - an unreadable note is not a dead engine either
+            return ""
+        return str(value or "")
 
     def _delegate_words(self) -> dict[str, Any]:
         """The delegate's own status, if it has one. Never raises: a description that fails

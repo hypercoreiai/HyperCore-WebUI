@@ -22,11 +22,18 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serve.offline_engine import (DeferredEngine, EngineRetry, EngineUnavailable, OfflineEngine)
-from serve.server import HyperCoreRequestHandler, engine_from_active_config
-from serve.direct_engine import DirectEngine
-from serve import quant_store, server
 from unittest.mock import patch
+
+from serve import quant_store, server
+from serve.direct_engine import DirectEngine
+from serve.offline_engine import (
+    UNLOADED_CODE,
+    DeferredEngine,
+    EngineRetry,
+    EngineUnavailable,
+    OfflineEngine,
+)
+from serve.server import HyperCoreRequestHandler, engine_from_active_config
 
 FAKE_ENGINE = """#!/bin/sh
 # A stand-in for the Strata engine, speaking the control protocol serve/direct_engine.py
@@ -496,6 +503,56 @@ class DeferredEngineTests(unittest.TestCase):
         state = deferred.status()
         self.assertEqual(state["state"], "running", "the engine is up; only its words failed")
         self.assertIn("could not describe itself", deferred.last_error)
+
+    class DeadWorkerAdapter:
+        """The worker adapter after a build whose process exited during startup: no
+        status(), only the note the supervisor kept. Brought up through restart()."""
+        def __init__(self, note: str) -> None:
+            self.note = note
+            self.model = "Qwen2-7B-Q2_0"
+            self.max_context = 0
+
+        def restart(self) -> bool:
+            return False
+
+        def alive(self) -> bool:
+            return False
+
+        def death_note(self) -> str:
+            return self.note
+
+    def test_an_engine_that_was_taken_and_failed_speaks_in_its_own_words(self) -> None:
+        """Once an engine has been taken, the startup sentence is not the cause.
+
+        This is what the real worker on this box showed: the run-config read gave the
+        adapter over the supervisor, the worker was started from engine/engine_q2_0/, and it
+        exited at its memory guard. /health answered - but with "no engine was asked for",
+        which is no longer true: an engine was asked for, and it is not running.
+        """
+        note = ("[hypercore] starting the engine: reading the model's weights ...\n"
+                "strata generate: memory guard: limit 30.5 GiB (source: meminfo), "
+                "available 4.9 GiB, floor 2560 MiB")
+        adapter = DeferredEngineTests.DeadWorkerAdapter(note)
+        deferred = DeferredEngine(lambda: adapter, "started with --ui-only: no engine was asked for")
+        self.assertFalse(deferred.restart(), "the process exited before it was ready")
+        state = deferred.status()
+        self.assertEqual(state["state"], "offline")
+        self.assertEqual(state["reason"], note.splitlines()[-1],
+                         "the health route still describes the stand-in, not the engine")
+        self.assertEqual(state["code"], UNLOADED_CODE,
+                         "the engine was asked for and is not here yet")
+        self.assertEqual(state["detail"], note, "the full account stays for the Monitor")
+        self.assertEqual(state["model"], adapter.model)
+
+    def test_an_engine_that_cannot_say_why_keeps_the_reason_it_was_given(self) -> None:
+        """A dead engine with no note is not a licence to invent one."""
+        silent = DeferredEngineTests.DeadWorkerAdapter("")
+        deferred = DeferredEngine(lambda: silent, "started with --ui-only: no engine was asked for")
+        self.assertFalse(deferred.restart())
+        state = deferred.status()
+        self.assertEqual(state["state"], "offline")
+        self.assertEqual(state["code"], "ui_only", "the tab mapping is asserted at tests/test_offline_tabs.py")
+        self.assertEqual(state["reason"], "started with --ui-only: no engine was asked for")
 
     def test_the_run_config_read_returns_the_adapter_the_startup_path_uses(self) -> None:
         """The same object main() builds, not the process owner by itself."""

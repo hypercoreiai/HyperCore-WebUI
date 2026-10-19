@@ -232,6 +232,22 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   bad description, not a dead engine. An engine that is brought up through `restart()` (the
   worker adapter, which has no `start()`) is brought up that way. `tests/test_offline_engine.py`
   has six cases for the delegation.
+- **Once an engine has been taken, the health route speaks in that engine's words.** An
+  engineless server that adopted a build's engine still answered `/health` with the sentence
+  it was started with - "started with --ui-only: no engine was asked for" - even after an
+  engine had been asked for and had failed. `DeferredEngine.status()` keeps that reason only
+  while nothing has been taken; once a delegate is behind it and is not running, the state is
+  described from what that delegate can say - `death_note()` / `last_stderr()`, which is all
+  the worker adapter and the supervisor behind it have, since `status()` is not part of that
+  shape. The full account stays in `detail` for the Monitor, the banner gets the engine's own
+  conclusion, and `code` is the engine's if it has one, otherwise `reason_code()` on the note.
+  Checked on this box with the real worker from `engine/engine_q2_0/`: the process was started
+  from the build and exited at its memory guard (the machine's memory is held by the other
+  server running here), and `/health` answered with `unloaded_or_compiling` and the engine's
+  own line rather than the startup reason. An engine that cannot say why keeps the reason it
+  was given, so the `ui_only` mapping asserted at `tests/test_offline_tabs.py` is unchanged.
+  `tests/test_offline_engine.py` has two cases for it: a dead worker adapter that can say why,
+  and one that cannot.
 - **The banner's red button stops the engine, not the app.** It reads "Stop Engine", arms
   on the first click ("Confirm") and stops the model, the image encoder and the MCP
   servers on the second (`POST /v1/stop`, the engine-only pair that already existed for
