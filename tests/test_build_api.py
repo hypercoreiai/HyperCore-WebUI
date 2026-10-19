@@ -735,7 +735,7 @@ class VisionBuildTests(unittest.TestCase):
         vision.write_bytes(b"vision encoder")
         job = BuildJob()
         job.log_path = self.tmp / "build.log"
-        copied, key = job.transfer_binaries(build_dir, {"version": "0.1.45"}, "iq2_xs", [vision])
+        copied, _key = job.transfer_binaries(build_dir, {"version": "0.1.45"}, "iq2_xs", [vision])
         self.assertEqual(sorted(copied), ["strata", "strata-vision"])
         self.assertEqual((quant_store.store_dir("iq2_xs") / "strata-vision").read_bytes(),
                          b"vision encoder")
