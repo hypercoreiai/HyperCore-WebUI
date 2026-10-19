@@ -90,8 +90,21 @@ class OfflineEngine:
         #: attempt has been made: until then the only reason there is is the one the
         #: server started with.
         self.last_error: str = ""
-        self.info: dict[str, Any] = {}
+        #: What the engine says about itself: caps, expert tiers, the pool. metrics() and
+        #: the Monitor read it; an engine that is not running has nothing to say.
+        self._info: dict[str, Any] = {}
         self.started_at = time.time()
+
+    @property
+    def info(self) -> dict[str, Any]:
+        """The engine's own account of itself.
+
+        A stand-in has none, and the empty dict is what the Monitor renders as "-". A
+        deferred engine overrides this: an engine it adopted has caps and expert tiers,
+        and reading them off the stand-in's empty dict is how a model that is loaded on
+        the card ends up shown as an empty one on the panel.
+        """
+        return dict(self._info)
 
     def report(self) -> str:
         """The reason to show a person: what the last attempt said, or the startup reason.
@@ -229,6 +242,46 @@ class DeferredEngine(OfflineEngine):
 
     def unload(self) -> bool:
         return bool(self.engine and self.engine.unload())
+
+    @property
+    def info(self) -> dict[str, Any]:
+        """The adopted engine's account, read at the moment it is asked for.
+
+        The caps (expert_slots, expert_cache_mib, pool_workers, vram_free_mib) and the
+        counters of the last request are what the Monitor's "Experts in VRAM" bar, the
+        conversation-cache card and the About tab's memory facts are built from. They come
+        off the delegate on every call rather than snapshotted at build time: a worker
+        brought back after a restart can come up with different slots, and a snapshot would
+        keep reporting the ones the previous worker had.
+        """
+        if self.engine is None:
+            return {}
+        said = getattr(self.engine, "info", None)
+        return dict(said) if isinstance(said, dict) else {}
+
+    @property
+    def slots_view(self) -> list[dict[str, object]]:
+        """The expert tiers as the Monitor and the tuner read them, or nothing yet."""
+        if self.engine is None:
+            return []
+        view = getattr(self.engine, "slots_view", None)
+        if not callable(view):
+            return []
+        try:
+            return list(view() or [])
+        except Exception:  # noqa: BLE001 - a delegate's tiers are read-only reporting;
+            # nothing here can be repaired, and the Monitor must still render
+            return []
+
+    @property
+    def log_path(self) -> str | None:
+        """Where the engine writes its conversation log, for the parked-conversation card."""
+        return getattr(self.engine, "log_path", None) if self.engine is not None else None
+
+    @property
+    def log_start(self) -> int | None:
+        """The byte offset this server began reading that log at."""
+        return getattr(self.engine, "log_start", None) if self.engine is not None else None
 
     def shutdown(self) -> None:
         if self.engine is not None:

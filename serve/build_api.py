@@ -824,6 +824,12 @@ class BuildJob:
                 shutil.copy2(src, ENGINE_DIR / src.name)
                 copied.append(src.name)
             (ENGINE_DIR / "BUILD.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+            # A build with no quant named is the default engine, and the run configs that
+            # name no quant read their runtime files from engine/data/, next to the
+            # binary. Without this they have no data folder at all.
+            stored = quant_store.carry_data_dir(None, clone)
+            if stored:
+                self.log_line(f"stored engine/data: {len(stored)} runtime file(s)")
         return copied, key
 
     def start(self, tag: str, options: dict[str, Any], quant: str | None = None) -> dict[str, Any]:
@@ -935,9 +941,15 @@ class BuildJob:
             # touched, so the runtime files the release ships survive the build.
             merged = self.merge_clone_data(clone)
 
+            # Every run config in config/ is pointed at the build stored for its model,
+            # not just the config of the quant this build was asked for.
+            refreshed = quant_store.refresh_run_configs(key, clone)
+            for line in refreshed:
+                self.log_line(f"run configs updated: {line}")
+
             self.clean_tmp()          # tmp/ is left in place: nothing at runtime reads it
             self.result = {"copied": copied, "version": meta["version"], "quant": key,
-                           "merged_data": merged}
+                           "merged_data": merged, "refreshed_configs": refreshed}
             self.state = "done"
         except Exception as exc:  # noqa: BLE001 - report it to the tab, do not take the server down
             self.state = "failed"
@@ -982,21 +994,34 @@ class BuildJob:
             meta["quant"] = key
             meta["label"] = key
             entry = quant_store.store_binaries(key, [p for p in unpacked.rglob("*") if p.is_file()], meta)
+            # store_binaries keeps the engine artifacts; the runtime data the archive
+            # carries (the expert profile, the draft vocab) goes next to them.
+            carried = quant_store.carry_data_dir(key, unpacked)
+            if carried:
+                self.log_line(f"stored engine/{quant_store.store_dir(key).name}/data: "
+                              f"{len(carried)} runtime file(s)")
             self.clean_tmp()
             cfg_path, cfg_note = quant_store.ensure_run_config(key)
+            refreshed = quant_store.refresh_run_configs(key)
+            for line in refreshed:
+                self.log_line(f"run configs updated: {line}")
             chosen = quant_store.select(key)
             return {"ok": True, "version": release.get("version"), "quant": key,
                     "sha256": digest, "files": sorted(entry["files"]),
                     "engine_dir": str(quant_store.store_dir(key)),
                     "run_config": str(cfg_path) if cfg_path else None,
                     "run_config_note": cfg_note,
+                    "refreshed_configs": refreshed,
                     "active": chosen["active"], "note": chosen["note"]}
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(ENGINE_DIR)
         zip_path.unlink(missing_ok=True)
         (ENGINE_DIR / "BUILD.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+        refreshed = quant_store.refresh_run_configs(None)
+        for line in refreshed:
+            self.log_line(f"run configs updated: {line}")
         return {"ok": True, "version": release.get("version"), "sha256": digest, "files": sorted(
-            p.name for p in ENGINE_DIR.iterdir())}
+            p.name for p in ENGINE_DIR.iterdir()), "refreshed_configs": refreshed}
 
 
 JOB = BuildJob()

@@ -638,12 +638,16 @@ class RunConfigTests(unittest.TestCase):
                          "/home/anotheruser/Strata-data/packs/q2_0",
                          "the Build tab moved a model pack the user installed elsewhere")
 
-    def test_with_no_config_to_copy_there_is_nothing_to_write(self) -> None:
+    def test_with_no_config_to_copy_the_code_template_is_used(self) -> None:
         for path in list(self.config.iterdir()):
             path.unlink()
         target, note = quant_store.ensure_run_config("iq2_s")
-        self.assertIsNone(target)
-        self.assertIn("no run config", note)
+        self.assertIsNotNone(target, note)
+        self.assertEqual(target, self.config / "run-iq2_s.json")
+        self.assertIn("created config/run-iq2_s.json", note)
+        cfg = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["model_name"], "iq2_s")
+        self.assertIn("--resident-experts", cfg["args"], "the template config lost the flags")
 
     def test_a_bad_quant_name_is_refused_not_turned_into_a_file(self) -> None:
         with self.assertRaises(ValueError):
@@ -726,6 +730,269 @@ class MergeDataTests(unittest.TestCase):
         merged = quant_store.merge_data(self.clone, dest=outside)
         self.assertEqual(merged["added"], [])
         self.assertFalse(outside.exists(), "the merge wrote outside the project root")
+
+
+class RefreshRunConfigTests(unittest.TestCase):
+    """A build points every run config in config/ at the build stored for its model.
+
+    The Build tab writes the config of the quant it was asked for. The other configs on
+    the box keep what they had: the shipped template names `engine/engine_q2_0/strata`
+    and `/ABSOLUTE/PATH/TO/expert-profile.bin` on a machine that built IQ2_XS, and a
+    model built earlier has no data folder of its own. The sweep at the end of a build
+    fixes them all, and leaves alone a config there is nothing to fix - a model with no
+    engine build, or a path that already exists on this box.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.engine = self.root / "engine"
+        self.config = self.root / "config"
+        self.clone = self.root / "tmp" / "strata-v0.1.45"
+        self.engine.mkdir()
+        self.config.mkdir()
+        (self.clone / "data").mkdir(parents=True)
+        (self.clone / "data" / "expert-profile.bin").write_bytes(b"the build's profile")
+        (self.clone / "data" / "draft_vocab.bin").write_bytes(b"vocab")
+        self._saved = (quant_store.ENGINE_DIR, quant_store.LEGACY_DIR, quant_store.INDEX_PATH,
+                       quant_store.CONFIG_DIR, quant_store.ROOT, quant_store.LOG_DIR,
+                       quant_store.TMP_DIR)
+        quant_store.ENGINE_DIR = self.engine
+        quant_store.LEGACY_DIR = self.engine / "versions"
+        quant_store.INDEX_PATH = self.engine / "VERSIONS.json"
+        quant_store.CONFIG_DIR = self.config
+        quant_store.ROOT = self.root
+        quant_store.LOG_DIR = self.root / "logs"
+        quant_store.TMP_DIR = self.root / "tmp"
+
+    def tearDown(self) -> None:
+        quant_store.ENGINE_DIR, quant_store.LEGACY_DIR, quant_store.INDEX_PATH, \
+            quant_store.CONFIG_DIR, quant_store.ROOT, quant_store.LOG_DIR, \
+            quant_store.TMP_DIR = self._saved
+        self.tmp.cleanup()
+
+    def _store(self, key: str, payload: bytes = b"engine") -> Path:
+        """An engine build on the box for this quant."""
+        built = self.root / f"build-{key}"
+        built.mkdir()
+        (built / "strata").write_bytes(payload)
+        quant_store.store_binaries(key, [built / "strata"], {"version": "0.1.45"})
+        return quant_store.store_dir(key)
+
+    def _config(self, name: str, quant: str | None = None) -> Path:
+        """A run config in config/ naming a quant, with a placeholder runtime file."""
+        cfg = {
+            "exe": "engine/strata",
+            "args": ["--kv", "int8", "--expert-profile", "/ABSOLUTE/PATH/TO/expert-profile.bin"],
+            "model_name": quant or "",
+            "log": "logs/strata.log",
+            "port": 8080,
+        }
+        path = self.config / name
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        return path
+
+    def test_a_build_updates_the_config_of_every_model_it_stored_a_build_for(self) -> None:
+        """The q2_0 case: a model built earlier gets its data folder and its pointer."""
+        self._store("iq2_xs")
+        self._store("q2_0")
+        self._config("run-iq2_xs.json", "iq2_xs")
+        self._config("run-q2_0.json", "q2_0")
+        notes = quant_store.refresh_run_configs("iq2_xs", self.clone)
+        joined = " ".join(notes)
+        for key in ("iq2_xs", "q2_0"):
+            stored = quant_store.data_dir(key) / "expert-profile.bin"
+            self.assertTrue(stored.is_file(), f"the build stored no runtime data for {key}")
+            cfg = json.loads((self.config / f"run-{key}.json").read_text(encoding="utf-8"))
+            self.assertEqual(cfg["args"][3], str(stored),
+                             f"config/run-{key}.json still names the placeholder")
+            self.assertIn(f"run-{key}.json", joined)
+
+    def test_a_config_for_a_model_with_no_engine_build_is_left_alone(self) -> None:
+        """There is nothing to point at, so the placeholder is better than a guess."""
+        self._store("iq2_xs")
+        path = self._config("run-q4_k_m.json", "q4_k_m")
+        before = path.read_text()
+        notes = quant_store.refresh_run_configs("iq2_xs", self.clone)
+        self.assertEqual(path.read_text(), before, "a config with no build was rewritten")
+        self.assertFalse(any("q4_k_m" in n for n in notes))
+        self.assertFalse(quant_store.data_dir("q4_k_m").exists(),
+                         "a data folder was made for a model that was never built")
+
+    def test_the_shipped_template_is_repaired_when_its_quant_has_a_build(self) -> None:
+        """config/run-example.json names q2_0 and is the config the server falls back to."""
+        store = self._store("q2_0")
+        path = self._config("run-example.json", "q2_0")
+        notes = quant_store.refresh_run_configs("q2_0", self.clone)
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["exe"], str(store / "strata"),
+                         "the fallback config still names an engine that is not here")
+        self.assertEqual(cfg["args"][3], str(quant_store.data_dir("q2_0") / "expert-profile.bin"))
+        self.assertTrue(any("run-example.json" in n for n in notes))
+
+    def test_a_config_naming_no_quant_uses_the_default_engine_data(self) -> None:
+        """engine/data/ is the runtime data of the engine in engine/ itself."""
+        (self.engine / "data").mkdir()
+        (self.engine / "data" / "expert-profile.bin").write_bytes(b"the default profile")
+        path = self._config("run-default.json", None)
+        notes = quant_store.refresh_run_configs(None)
+        self.assertTrue(notes, "the default engine's config was not pointed at its data")
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["args"][3], str(quant_store.data_dir(None) / "expert-profile.bin"))
+
+    def test_a_config_that_is_already_right_is_not_written_again(self) -> None:
+        self._store("q2_0")
+        path = self._config("run-q2_0.json", "q2_0")
+        first = quant_store.refresh_run_configs("q2_0", self.clone)
+        self.assertTrue(first)
+        before = path.read_text()
+        second = quant_store.refresh_run_configs("q2_0", self.clone)
+        self.assertEqual(second, [], "the second sweep changed a config that was already right")
+        self.assertEqual(path.read_text(), before, "the config was rewritten for nothing")
+
+    def test_a_runtime_file_the_user_installed_elsewhere_keeps_its_path(self) -> None:
+        other = self.root / "another-install" / "data" / "expert-profile.bin"
+        other.parent.mkdir(parents=True)
+        other.write_bytes(b"the one on this box")
+        self._store("q2_0")
+        path = self._config("run-q2_0.json", "q2_0")
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["args"][3] = str(other)
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        quant_store.refresh_run_configs("q2_0", self.clone)
+        self.assertEqual(json.loads(path.read_text())["args"][3], str(other),
+                         "the sweep moved a runtime file the user installed")
+        self.assertEqual(other.read_bytes(), b"the one on this box")
+
+    def test_with_no_config_directory_there_is_nothing_to_refresh(self) -> None:
+        for path in list(self.config.iterdir()):
+            path.unlink()
+        self.config.rmdir()
+        self.assertEqual(quant_store.refresh_run_configs("q2_0", self.clone), [])
+
+
+class GenerateRunConfigTests(unittest.TestCase):
+    """A build writes the run config a model needs, even when config/ is empty.
+
+    A fresh clone ships no run config but the template, and a user who clears config/
+    leaves nothing to copy. There was then no base for a new config, so a build stored
+    an engine and wrote no config: nothing in the Model version dropdown and no way to
+    start what was just compiled. The shape lives in code now, and the sweep at the end
+    of a build writes a config for every engine build on the box, not only the quant the
+    build was named for.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.engine = self.root / "engine"
+        self.config = self.root / "config"
+        self.clone = self.root / "tmp" / "strata-v0.1.45"
+        self.engine.mkdir()
+        self.config.mkdir()
+        (self.clone / "data").mkdir(parents=True)
+        (self.clone / "data" / "expert-profile.bin").write_bytes(b"the build's profile")
+        self._saved = (quant_store.ENGINE_DIR, quant_store.LEGACY_DIR, quant_store.INDEX_PATH,
+                       quant_store.CONFIG_DIR, quant_store.ROOT, quant_store.LOG_DIR,
+                       quant_store.TMP_DIR)
+        quant_store.ENGINE_DIR = self.engine
+        quant_store.LEGACY_DIR = self.engine / "versions"
+        quant_store.INDEX_PATH = self.engine / "VERSIONS.json"
+        quant_store.CONFIG_DIR = self.config
+        quant_store.ROOT = self.root
+        quant_store.LOG_DIR = self.root / "logs"
+        quant_store.TMP_DIR = self.root / "tmp"
+
+    def tearDown(self) -> None:
+        quant_store.ENGINE_DIR, quant_store.LEGACY_DIR, quant_store.INDEX_PATH, \
+            quant_store.CONFIG_DIR, quant_store.ROOT, quant_store.LOG_DIR, \
+            quant_store.TMP_DIR = self._saved
+        self.tmp.cleanup()
+
+    def _store(self, key: str, payload: bytes = b"engine") -> Path:
+        built = self.root / f"build-{key}"
+        built.mkdir()
+        (built / "strata").write_bytes(payload)
+        quant_store.store_binaries(key, [built / "strata"], {"version": "0.1.45"})
+        return built
+
+    def test_a_build_writes_a_run_config_when_config_is_empty(self) -> None:
+        self._store("q2_0")
+        notes = quant_store.refresh_run_configs("q2_0", self.clone)
+        path = self.config / "run-q2_0.json"
+        self.assertTrue(path.is_file(), "the build stored an engine and wrote no run config")
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["exe"], str(self.engine / "engine_q2_0" / "strata"))
+        self.assertEqual(cfg["model_name"], "q2_0")
+        self.assertEqual(cfg["log"], "logs/strata-q2_0.log")
+        self.assertEqual(cfg["args"][cfg["args"].index("--expert-profile") + 1],
+                         str(self.engine / "engine_q2_0" / "data" / "expert-profile.bin"),
+                         "the runtime file the build shipped is not named in the config it wrote")
+        self.assertIn("created config/run-q2_0.json", " ".join(notes))
+
+    def test_every_engine_build_on_the_box_gets_a_run_config(self) -> None:
+        """A build named for one quant must not leave an earlier build unstartable."""
+        self._store("q2_0")
+        self._store("iq2_xs")
+        notes = quant_store.refresh_run_configs("iq2_xs", self.clone)
+        for key in ("q2_0", "iq2_xs"):
+            path = self.config / f"run-{key}.json"
+            self.assertTrue(path.is_file(), f"engine/engine_{key} has no run config to start it")
+            cfg = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(cfg["exe"], str(self.engine / f"engine_{key}" / "strata"))
+        self.assertEqual(len([n for n in notes if n.startswith("created config/")]), 2,
+                         f"the sweep wrote one config for two builds: {notes}")
+
+    def test_a_config_that_already_exists_is_not_replaced_by_the_template(self) -> None:
+        self._store("q2_0")
+        installed = self.root / "box" / "expert-profile.bin"      # a file the user put here
+        installed.parent.mkdir(parents=True)
+        installed.write_bytes(b"the one on this box")
+        (self.config / "run-q2_0.json").write_text(json.dumps(
+            {"exe": "engine/strata", "model_name": "my q2_0",
+             "args": ["--expert-profile", str(installed)]}), encoding="utf-8")
+        quant_store.refresh_run_configs("q2_0", self.clone)
+        cfg = json.loads((self.config / "run-q2_0.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["args"][1], str(installed),
+                         "the sweep moved a runtime file the user installed")
+        self.assertEqual(installed.read_bytes(), b"the one on this box")
+        self.assertEqual(cfg["exe"], str(self.engine / "engine_q2_0" / "strata"))
+
+    def test_no_config_is_invented_for_a_quant_that_was_never_built(self) -> None:
+        self._store("q2_0")
+        quant_store.refresh_run_configs("q2_0", self.clone)
+        self.assertFalse((self.config / "run-q4_k_m.json").exists(),
+                        "a config was written for a model with no engine build")
+
+    def test_the_config_is_written_when_the_config_directory_does_not_exist(self) -> None:
+        self._store("q2_0")
+        self.config.rmdir()
+        notes = quant_store.refresh_run_configs("q2_0", self.clone)
+        self.assertTrue((self.config / "run-q2_0.json").is_file(),
+                        f"config/ was gone and nothing was written: {notes}")
+
+    def test_the_config_the_build_wrote_is_the_one_offered(self) -> None:
+        """The repaired template names q2_0 as well; the build's own config wins."""
+        self._store("q2_0")
+        (self.config / "run-example.json").write_text(json.dumps(
+            {"exe": "engine/strata", "model_name": "q2_0",
+             "args": ["--expert-profile",
+                      str(self.engine / "engine_q2_0" / "data" / "expert-profile.bin")]}),
+            encoding="utf-8")
+        quant_store.refresh_run_configs("q2_0", self.clone)
+        versions = quant_store.list_versions()
+        self.assertEqual(len(versions), 1, "the template was counted as a second model")
+        self.assertEqual(versions[0]["config_name"], "run-q2_0.json",
+                         "the dropdown offers the template instead of the config the build wrote")
+
+    def test_a_config_written_from_the_code_template_is_a_valid_run_config(self) -> None:
+        cfg = quant_store._template_config("iq2_xs")
+        for field in ("exe", "args", "cwd", "tokenizer", "model_name", "log", "port", "host", "gpu"):
+            self.assertIn(field, cfg, f"the template config is missing {field}")
+        self.assertEqual(cfg["model_name"], "iq2_xs")
+        self.assertEqual(cfg["log"], "logs/strata-iq2_xs.log")
+        self.assertIn("/ABSOLUTE/PATH/TO/packs/iq2_xs", cfg["args"],
+                      "the quant is not carried into the placeholder paths")
 
 
 if __name__ == "__main__":

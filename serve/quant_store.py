@@ -82,6 +82,41 @@ QUANT_IN_TEXT = re.compile(r"\b(?:iq|q)\d(?:_[a-z0-9]+)*\b", re.IGNORECASE)
 
 DEFAULT_KEY = "default"
 
+#: The run config a build writes when this box has no run config to copy from.
+#: config/run-example.json is the shipped template, but nothing guarantees it is
+#: there: a fresh clone, a config/ the user cleared, a checkout that never carried it.
+#: With no base there was nothing to write, so a build stored an engine with no run
+#: config to start it and the Model version dropdown had nothing to offer. The shape
+#: therefore lives in code. Everything the build can know is filled in - the engine
+#: binary, the runtime files the clone shipped, the model paths this project's data
+#: area holds - and what it cannot know stays a placeholder named in _note.
+RUN_CONFIG_TEMPLATE: dict[str, Any] = {
+    "_note": "Written by the Build tab. Fill in the /ABSOLUTE/PATH/TO entries with "
+             "the model files on this box.",
+    "exe": "engine/strata",
+    "args": [
+        "--pack", "/ABSOLUTE/PATH/TO/packs/{quant}",
+        "--native", "/ABSOLUTE/PATH/TO/models/{quant}/model-00001-of-00002.gguf",
+        "--ple-gguf", "/ABSOLUTE/PATH/TO/models/{quant}/model-00002-of-00002.gguf",
+        "--expert-profile", "/ABSOLUTE/PATH/TO/expert-profile.bin",
+        "--expert-cache", "auto",
+        "--prefill", "auto",
+        "--spec", "4",
+        "--mtp", "/ABSOLUTE/PATH/TO/mtp/rt",
+        "--max-context", "131072",
+        "--kv", "int8",
+        "--resident-experts",
+    ],
+    "cwd": ".",
+    "tokenizer": "/ABSOLUTE/PATH/TO/packs/{quant}/tokenizer",
+    "model_name": "{quant}",
+    "log": "logs/strata-{quant}.log",
+    "port": 8080,
+    "host": "0.0.0.0",
+    "gpu": 0,
+    "gpus_asked": True,
+}
+
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -239,6 +274,22 @@ def config_is_template(path: Any) -> bool:
     if not raw.strip():
         return True
     return TEMPLATE_MARKER in raw
+
+
+def _template_config(key: str) -> dict[str, Any]:
+    """A fresh run config for one quant, written from RUN_CONFIG_TEMPLATE.
+
+    Used when config/ holds no run config to copy. The quant is put into every path
+    and name the template carries; the engine binary and the log are set to where this
+    build lives, and the model paths stay placeholders until `repair_model_paths` or
+    the user fills them in.
+    """
+    cfg: dict[str, Any] = json.loads(json.dumps(RUN_CONFIG_TEMPLATE))
+    for field in ("tokenizer", "model_name", "log"):
+        if isinstance(cfg.get(field), str):
+            cfg[field] = cfg[field].format(quant=key)
+    cfg["args"] = [a.format(quant=key) if isinstance(a, str) else a for a in cfg["args"]]
+    return cfg
 
 
 def _run_configs() -> list[dict[str, Any]]:
@@ -841,6 +892,10 @@ def point_config_at_build(cfg: dict[str, Any], key: str, source_root: Path | Non
 
     changes += point_data_at_build(cfg, key)
     changes += repair_model_paths(cfg, key)
+    # A config copied from the shipped template still calls itself a template.
+    if isinstance(cfg.get("_note"), str) and cfg["_note"].startswith("Template for"):
+        cfg["_note"] = _written_note(key, cfg)
+        changes.append("_note -> written by the Build tab")
     return changes
 
 
@@ -998,6 +1053,19 @@ def repair_model_paths(cfg: dict[str, Any], key: str) -> list[str]:
     return out
 
 
+def _written_note(key: str, cfg: dict[str, Any]) -> str:
+    """What a run config the Build tab wrote says about itself.
+
+    The shipped template calls itself a template; a config the build wrote is not one.
+    Paths the box does not have yet are named, so the user knows what to fill in.
+    """
+    note = f"Written by the Build tab for quant {key}."
+    missing = [p for p in _paths_in(cfg) if not _exists(p)]
+    if missing:
+        note += f" These paths are not on this box yet: {', '.join(missing)}"
+    return note
+
+
 def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path | None, str]:
     """Write config/run-<quant>.json for a build, or repair the one that exists.
 
@@ -1008,7 +1076,9 @@ def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path
     - the active version's, otherwise any - with the quant in its paths, model name
     and log file rewritten to this one, and then pointed at the build. Paths that are
     not here are named in a _note so they can be filled in; the file is still a valid
-    run config.
+    run config. When config/ holds no run config to copy, the shape comes from
+    RUN_CONFIG_TEMPLATE in this module, so a build on a box with an empty config/ still
+    writes one.
 
     Returns (path, note), or (None, why nothing was written).
     """
@@ -1036,32 +1106,37 @@ def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path
         return target, f"updated config/{target.name}: {', '.join(changes)}"
 
     configs = _run_configs()
-    if not configs:
-        base = CONFIG_DIR / "run-example.json"
-        if not base.is_file():
-            return None, "there is no run config to base a new one on"
-    else:
+    cfg: dict[str, Any] | None = None
+    if configs:
         active = index().get("active")
         chosen = next((c for c in configs if c["quant"] == active), configs[0])
         base = Path(chosen["path"])
-    try:
-        cfg = json.loads(base.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
-        return None, f"the run config {base.name} could not be read: {exc}"
-    if not isinstance(cfg, dict):
-        return None, f"the run config {base.name} is not an object"
-    for field in ("model_name", "tokenizer", "log"):
-        if isinstance(cfg.get(field), str):
-            cfg[field] = _swap_quant(cfg[field], key)
-    args = cfg.get("args")
-    if isinstance(args, list):
-        cfg["args"] = [_swap_quant(a, key) if isinstance(a, str) and "/" in a else a for a in args]
+    elif (CONFIG_DIR / "run-example.json").is_file():
+        base = CONFIG_DIR / "run-example.json"       # the shipped template is the shape
+    else:
+        base = None                                  # nothing on the box to copy
+    if base is not None:
+        try:
+            read = json.loads(base.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            read = None
+        # A config that cannot be read is no base at all; the template in code is.
+        if isinstance(read, dict):
+            cfg = read
+    if cfg is None:
+        cfg = _template_config(key)
+    else:
+        for field in ("model_name", "tokenizer", "log"):
+            if isinstance(cfg.get(field), str):
+                cfg[field] = _swap_quant(cfg[field], key)
+        args = cfg.get("args")
+        if isinstance(args, list):
+            cfg["args"] = [_swap_quant(a, key) if isinstance(a, str) and "/" in a else a
+                           for a in args]
     changes = point_config_at_build(cfg, key, source_root)
     changes += repair_model_paths(cfg, key)
-    missing = [p for p in _paths_in(cfg) if not _exists(p)]
-    if missing:
-        cfg["_note"] = (f"Written by the Build tab for quant {key}. "
-                       f"These paths are not on this box yet: {', '.join(missing)}")
+    # A config the build wrote is not the shipped template, whatever it was copied from.
+    cfg["_note"] = _written_note(key, cfg)
     try:
         _write_json(target, cfg)
     except OSError as exc:
@@ -1070,9 +1145,110 @@ def ensure_run_config(quant: Any, source_root: Path | None = None) -> tuple[Path
     note = f"created config/{target.name}"
     if changes:
         note += f": {', '.join(changes)}"
+    missing = [p for p in _paths_in(cfg) if not _exists(p)]
     if missing:
         note += f"; fill in: {', '.join(missing)}"
     return target, note
+
+
+def _config_for_quant(key: str) -> Path | None:
+    """The run config in config/ written for this quant, or None when there is none.
+
+    The shipped template is not a config for a model: it names q2_0 because that is the
+    example it shows, so counting it as q2_0's config would leave a q2_0 build with no
+    config of its own.
+    """
+    named = CONFIG_DIR / f"run-{key}.json"
+    if named.is_file():
+        return named
+    for path in sorted(CONFIG_DIR.glob("*.json")):
+        if path.name in ("build_options.json", "run-example.json") or path.name.endswith(".bak"):
+            continue
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(cfg, dict) and quant_from_config(cfg) == key:
+            return path
+    return None
+
+
+def refresh_run_configs(quant: Any = None, source_root: Path | None = None) -> list[str]:
+    """Point every run config in config/ at the engine build stored for its model.
+
+    A build writes or repairs the run config of the quant it was asked for. Every other
+    config in config/ keeps whatever it had: the shipped template still names
+    `engine/engine_q2_0/strata` and `/ABSOLUTE/PATH/TO/expert-profile.bin` on a box that
+    built IQ2_XS, and a config written for one quant can still name the data folder of
+    an earlier build. The runtime files a build ships - expert-profile.bin, the draft
+    vocab, the speed projection - are stored in engine/engine_<quant>/data/ for every
+    quant, so one sweep at the end of a build can fix them all.
+
+    The sweep also writes the config a build is missing. Every engine build on the box -
+    the one this build made and every one made before it - gets `config/run-<quant>.json`
+    if it has none, so an engine never sits in engine/ with nothing to start it. A config
+    is written only when something actually changed.
+
+    Each config is matched to a quant by the paths and the model name it names
+    (`quant_from_config`). A config that names no quant is the default engine's, so its
+    data paths are pointed at engine/data/, the data folder of the engine in engine/.
+
+    Two things are never done: a config naming a quant with no engine build is left
+    alone, because there is nothing to point it at and inventing a path is worse than the
+    placeholder it already has; and a path that exists on this box is never overwritten,
+    so a runtime file the user installed elsewhere keeps its name.
+
+    Returns one line per config written or repaired. Empty when there was nothing to do.
+    """
+    notes: list[str] = []
+    builds = _build_dirs()
+    if not CONFIG_DIR.is_dir():
+        if not builds:                       # nothing to refresh and nothing to write
+            return notes
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)   # a build needs config/ to write into
+    clone = Path(source_root) if source_root else None
+    for path in sorted(CONFIG_DIR.glob("*.json")):
+        if path.name == "build_options.json" or path.name.endswith(".bak"):
+            continue
+        try:
+            cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        raw_key = quant_from_config(cfg)
+        if raw_key is None:
+            # No quant in the config: it is the default engine's. Its data folder is
+            # engine/data/, and only a build that put files there can point at it.
+            if not data_dir(None).is_dir():
+                continue
+            changes = point_data_at_build(cfg, None)
+        else:
+            try:
+                key = normalise_quant(raw_key)
+            except ValueError:
+                continue
+            if not (store_dir(key).is_dir() or (LEGACY_DIR / key).is_dir()):
+                continue          # no engine built for this model: nothing to point at
+            changes = point_config_at_build(cfg, key, source_root=clone)
+        if not changes:
+            continue
+        try:
+            _write_json(path, cfg)
+        except OSError as exc:
+            notes.append(f"config/{path.name}: could not write: {exc}")
+            continue
+        notes.append(f"config/{path.name}: {', '.join(changes)}")
+
+    # A build only writes the config of the quant it was named for. Every other engine
+    # build on the box needs one too, or it stays an engine with nothing to start it.
+    for key, _built in builds:
+        if _config_for_quant(key) is not None:
+            continue
+        path, note = ensure_run_config(key, source_root=clone)
+        if path is not None:
+            notes.append(note)
+    return notes
 
 
 def list_versions() -> list[dict[str, Any]]:
@@ -1087,7 +1263,12 @@ def list_versions() -> list[dict[str, Any]]:
     configs = _run_configs()
     out: list[dict[str, Any]] = []
     for key, entry in sorted(data["versions"].items()):
-        cfg = next((c for c in configs if c["quant"] == key), None)
+        # A quant can have more than one config on the box (the repaired template still
+        # names it, and a user may keep a config of their own). The one the Build tab
+        # wrote, run-<quant>.json, is the one to offer.
+        named = next((c for c in configs if c["quant"] == key and c["name"] == f"run-{key}.json"),
+                     None)
+        cfg = named or next((c for c in configs if c["quant"] == key), None)
         out.append({
             **entry,
             "engine_dir": str(store_dir(key)) if store_dir(key).is_dir() else entry.get("engine_dir"),

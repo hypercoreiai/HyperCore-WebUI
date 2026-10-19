@@ -71,9 +71,12 @@ meta = {"source": "built-from-source", "version": tag, "tag": tag, "worker": wor
         "src": hashlib.sha256((clone / "CMakeLists.txt").read_bytes()).hexdigest()[:16]}
 entry = quant_store.store_binaries(quant, sources, meta)
 cfg, note = quant_store.ensure_run_config(quant, source_root=clone)
+refreshed = quant_store.refresh_run_configs(quant, clone)
 chosen = quant_store.select(quant)
 print(f"stored engine/{quant_store.store_dir(quant).name}: {', '.join(sorted(entry['files']))}")
 print(f"run config: {note}")
+for line in refreshed:
+    print(f"run config: {line}")
 print(f"active engine: {chosen['note']}")
 PY
   rm -rf "$CLONE"

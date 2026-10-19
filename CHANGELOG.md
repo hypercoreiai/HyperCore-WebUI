@@ -28,6 +28,13 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   a subfolder the clone kept (`data/experimental-speed-projection/`), not the top of the
   data folder with the file name put back on it; two files carrying the same name are not
   resolved by guessing. A path that already exists on this box is left as the user left it.
+- **A build refreshes every run config, not just its own**: `serve/quant_store.py`
+  `refresh_run_configs(quant, clone)` walks `config/` at the end of a build and points each
+  config at the engine build stored for the model it names - the shipped
+  `config/run-example.json` included, which otherwise still names
+  `engine/engine_q2_0/strata` and `/ABSOLUTE/PATH/TO/expert-profile.bin` on a box that built
+  IQ2_XS. A config naming a model with no engine build is left alone, and a config already
+  pointing correctly is not rewritten.
 - **The clone a build used is kept**: `clean_tmp()` no longer deletes
   `tmp/strata-<version>`; the source stays in `tmp/` so the next build of the same
   release reuses it instead of cloning again, and the merge below has something to

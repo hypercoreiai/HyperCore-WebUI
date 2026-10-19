@@ -883,6 +883,88 @@ class MergeDataTests(unittest.TestCase):
                          "the run config still names the placeholder")
         self.assertIn("runtime file(s) from the clone stored", "\n".join(self.job.log))
 
+    def test_a_build_also_points_the_config_of_a_model_built_earlier(self) -> None:
+        """Every config in config/ is pointed at the build stored for its model.
+
+        The q2_0 case the user hit: the build was named for IQ2_XS, so only its own run
+        config was written, and the q2_0 config kept the placeholder while the profile sat
+        unread in engine/engine_q2_0/.
+        """
+        build_dir = self.clone / "build"
+        build_dir.mkdir()
+        (build_dir / "strata").write_bytes(b"elf")
+        # the template the repo ships, and the config the first build wrote from it
+        (quant_store.CONFIG_DIR / "run-example.json").write_text(json.dumps({
+            "exe": "engine/engine_q2_0/strata",
+            "model_name": "q2_0",
+            "args": ["--expert-profile", "/ABSOLUTE/PATH/TO/expert-profile.bin"]}),
+            encoding="utf-8")
+        earlier = self.tmp / "build-q2_0"
+        earlier.mkdir()
+        (earlier / "strata").write_bytes(b"q2 engine")
+        quant_store.store_binaries("q2_0", [earlier / "strata"], {"version": "0.1.45"})
+        (quant_store.CONFIG_DIR / "run-q2_0.json").write_text(json.dumps({
+            "exe": "engine/strata",
+            "model_name": "Qwen2-7B-Q2_0",
+            "args": ["--expert-profile", "/ABSOLUTE/PATH/TO/expert-profile.bin"]}),
+            encoding="utf-8")
+        self.job.transfer_binaries(build_dir, {"version": "0.1.45"}, "IQ2_XS")
+        notes = quant_store.refresh_run_configs("iq2_xs", self.clone)
+        joined = " ".join(notes)
+        for key in ("iq2_xs", "q2_0"):
+            stored = quant_store.data_dir(key) / "expert-profile.bin"
+            self.assertTrue(stored.is_file(), f"the build stored no runtime data for {key}")
+            cfg = json.loads((quant_store.CONFIG_DIR / f"run-{key}.json").read_text(encoding="utf-8"))
+            self.assertEqual(cfg["args"][1], str(stored),
+                             f"config/run-{key}.json still names the placeholder")
+        self.assertIn("run-q2_0.json", joined, "the sweep said nothing about the other model")
+        self.assertIn("run-example.json", joined, "the shipped template was left unrepaired")
+
+    def test_a_build_on_a_box_with_no_run_config_writes_one(self) -> None:
+        """config/ empty: the build still writes config/run-<quant>.json.
+
+        There is no run config to copy in a fresh clone once the user clears config/, and
+        the build used to give up with "there is no run config to base a new one on" - an
+        engine in engine/ with nothing to start it.
+        """
+        build_dir = self.clone / "build"
+        build_dir.mkdir()
+        (build_dir / "strata").write_bytes(b"elf")
+        self.job.transfer_binaries(build_dir, {"version": "0.1.45"}, "IQ2_XS")
+        cfg_path = quant_store.CONFIG_DIR / "run-iq2_xs.json"
+        self.assertTrue(cfg_path.is_file(), "the build stored an engine and wrote no run config")
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        self.assertEqual(cfg["exe"], str(quant_store.store_dir("iq2_xs") / "strata"))
+        self.assertEqual(cfg["args"][cfg["args"].index("--expert-profile") + 1],
+                         str(quant_store.data_dir("iq2_xs") / "expert-profile.bin"),
+                         "the config written from the code template lost the build's data")
+        self.assertIn("created config/run-iq2_xs.json", "\n".join(self.job.log))
+
+    def test_a_build_with_no_quant_names_stores_its_runtime_data_next_to_the_engine(self) -> None:
+        """engine/data/ is the runtime data of the default engine in engine/."""
+        build_dir = self.clone / "build"
+        build_dir.mkdir()
+        (build_dir / "strata").write_bytes(b"elf")
+        self.job.transfer_binaries(build_dir, {"version": "0.1.45"}, None)
+        stored = quant_store.data_dir(None) / "expert-profile.bin"
+        self.assertTrue(stored.is_file(), "the default engine build stored no runtime data")
+        self.assertIn("stored engine/data", "\n".join(self.job.log))
+
+    def test_the_sweep_runs_after_the_build_and_while_the_clone_is_still_there(self) -> None:
+        """The sweep reads the clone's data/, so it has to run before tmp/ is touched."""
+        source = (ROOT / "serve" / "build_api.py").read_text(encoding="utf-8")
+        body = source[source.index("def _run("):]
+        self.assertIn("quant_store.refresh_run_configs(key, clone)", body,
+                      "the build never sweeps the run configs of the other models")
+        self.assertLess(body.index("self.merge_clone_data(clone)"),
+                        body.index("quant_store.refresh_run_configs(key, clone)"),
+                        "the sweep runs before the build has stored anything")
+        self.assertLess(body.index("quant_store.refresh_run_configs(key, clone)"),
+                        body.rindex("self.clean_tmp()"),
+                        "the sweep runs after the clone it reads is gone")
+        self.assertIn('"refreshed_configs": refreshed', body,
+                      "the build does not report which configs it updated")
+
     def test_the_merge_runs_after_the_build_and_while_the_clone_is_still_there(self) -> None:
         """The merge reads the clone, so it has to run after the build and before any
         call that could remove it."""

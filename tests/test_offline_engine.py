@@ -388,6 +388,17 @@ class DeferredEngineTests(unittest.TestCase):
             self.model = "Qwen2-7B-Q2_0"
             self.max_context = 4096
             self.started = False
+            # What the worker's CAPS reply and the last request leave behind: the figures
+            # the Monitor's "Experts in VRAM" bar and the About tab are built from.
+            self.info = {"model": self.model, "max_context": self.max_context,
+                        "expert_slots": 12531, "expert_cache_mib": 16520,
+                        "pool_workers": 12, "vram_free_mib": 381,
+                        "ram_blobs": 21942, "hits": 88294, "lookups": 92000}
+            self.log_path = "logs/strata-q2_0.log"
+            self.log_start = 0
+
+        def slots_view(self) -> list[dict]:
+            return [{"layer": 0, "slots": 12}]
 
         def start(self) -> None:
             self.started = True
@@ -429,6 +440,47 @@ class DeferredEngineTests(unittest.TestCase):
         self.assertEqual(deferred.model, built.model)
         self.assertEqual(deferred.max_context, 4096)
         self.assertEqual(deferred.status()["state"], "ready", "the Monitor still reads the stand-in")
+
+    def test_the_monitor_reads_the_expert_tiers_off_the_adopted_engine(self) -> None:
+        """A model loaded on the card must not show up as an empty one on the panel.
+
+        The Monitor's "Experts in VRAM" bar, the conversation-cache card and the About
+        tab's memory facts all come from engine.info. A deferred engine that answers with
+        its own empty dict shows "-" while nvidia-smi says the weights are resident.
+        """
+        built = DeferredEngineTests.Built()
+        deferred = DeferredEngine(lambda: built, "started with --ui-only: no engine was asked for")
+        self.assertEqual(deferred.info, {}, "nothing is running, so nothing has an account of itself")
+        self.assertEqual(deferred.slots_view, [])
+        self.assertIsNone(deferred.log_path)
+        deferred.restart()
+        self.assertEqual(deferred.info["expert_slots"], 12531,
+                         "the Monitor shows '-' for a model that is loaded in VRAM")
+        self.assertEqual(deferred.info["expert_cache_mib"], 16520)
+        self.assertEqual(deferred.slots_view, [{"layer": 0, "slots": 12}])
+        self.assertEqual(deferred.log_path, "logs/strata-q2_0.log",
+                         "the parked-conversation card cannot find the engine's log")
+        built.info["expert_slots"] = 9000      # a worker brought back with fewer slots
+        self.assertEqual(deferred.info["expert_slots"], 9000,
+                         "the panel kept the figures from the build, not the current worker")
+
+    def test_the_metrics_engine_card_of_a_deferred_engine(self) -> None:
+        """GET /metrics is what the Monitor polls: the engine card must carry the tiers."""
+        from serve.server import ROOT, ByteTokenizer, ChatTemplate, Service
+
+        built = DeferredEngineTests.Built()
+        deferred = DeferredEngine(lambda: built, "started with --ui-only: no engine was asked for")
+        svc = Service(deferred, ByteTokenizer(), ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        before = svc.metrics()["engine"]
+        self.assertNotIn("expert_slots", before, "nothing is running, so the Monitor has no tiers to show")
+        self.assertEqual(svc.metrics()["live"]["state"], "unloaded")
+        deferred.restart()
+        engine = svc.metrics()["engine"]
+        self.assertEqual(engine["expert_slots"], 12531,
+                         "the Monitor shows '-' for a model that is loaded in VRAM")
+        self.assertEqual(engine["expert_cache_mib"], 16520)
+        self.assertEqual(engine["max_context"], 4096)
+        self.assertEqual(svc.metrics()["live"]["state"], "idle")
 
     def test_the_retry_adopts_a_build_when_one_appears(self) -> None:
         built = DeferredEngineTests.Built()
