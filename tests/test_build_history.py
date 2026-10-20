@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from build_history import (
+    HOME,
     PROJECT,
     chat_filename,
     clean,
@@ -47,10 +48,12 @@ class PathTests(unittest.TestCase):
     def test_the_engine_and_its_data_stay_absolute(self) -> None:
         # The engine is not "another project": this project runs it, so the paths are kept
         # and made absolute rather than dropped.
+        # Asserted against HOME, not a literal home: the same rule has to hold on the
+        # CI runner, where HOME is /home/runner and not this machine's.
         self.assertEqual(relocate("~/Strata-data/packs/q2_0/tokenizer"),
-                         "/home/ai-user0/Strata-data/packs/q2_0/tokenizer")
+                         str(HOME / "Strata-data" / "packs" / "q2_0" / "tokenizer"))
         self.assertEqual(relocate("~/Strata/data/expert-profile.bin"),
-                         "/home/ai-user0/Strata/data/expert-profile.bin")
+                         str(HOME / "Strata" / "data" / "expert-profile.bin"))
 
     def test_relative_paths_in_the_repository_are_left_alone(self) -> None:
         for s in ("engine/strata", "config/run-q2_0.json", "serve/web/app.js"):
@@ -58,13 +61,13 @@ class PathTests(unittest.TestCase):
 
     def test_an_approximation_sign_is_not_a_home_path(self) -> None:
         # "~34%" is "about 34%", not a directory. It used to become
-        # "/home/ai-user0/34%", which is why the IPCC line in the history read as a path.
+        # "<HOME>/34%", which is why the IPCC line in the history read as a path.
         for s in ("a decline of ~34% (10-43%) by 2100", "about ~10 K", "a ~2 GB model",
                   "run it in ~3 s", "the ~5% that failed"):
             self.assertEqual(relocate(s), s, f"{s} was read as a path")
         # A name after the tilde is still a home path.
         self.assertEqual(relocate("~/black_box/serve"), str(PROJECT / "serve"))
-        self.assertEqual(relocate("~/Strata/data"), "/home/ai-user0/Strata/data")
+        self.assertEqual(relocate("~/Strata/data"), str(HOME / "Strata" / "data"))
 
     def test_trailing_punctuation_is_not_part_of_the_path(self) -> None:
         out = relocate("the file is at ~/black_box/tests/test_x.py.")
