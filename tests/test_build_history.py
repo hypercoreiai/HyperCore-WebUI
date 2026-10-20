@@ -82,13 +82,26 @@ class PathTests(unittest.TestCase):
         self.assertEqual(relocate("check ~HyperCore-Tune-maya for the sweep code"),
                          f"check {PROJECT / 'optuna_tune'} for the sweep code")
 
+    def test_the_project_aliases_exist_in_the_repository(self) -> None:
+        # These two resolve inside the repository, so they are checkable in a fresh clone
+        # as well as here.
+        for alias in ("~/black_box/serve", "~/HyperCore-Tune-maya"):
+            self.assertTrue(Path(relocate(alias)).exists(), relocate(alias))
+
     @unittest.skipUnless(
         (PROJECT / "data" / "history" / "_old_chats").is_dir(),
         "the transcript archive is machine-local (data/* is gitignored): a fresh clone has none"
     )
-    def test_every_rewritten_path_exists_on_this_machine(self) -> None:
-        for alias in ("~/black_box/serve", "~/HyperCore-Tune-maya", "~/black_box_chats",
-                      "~/Strata-data", "~/Strata"):
+    def test_the_archive_alias_exists_here(self) -> None:
+        self.assertTrue(Path(relocate("~/black_box_chats")).exists(), relocate("~/black_box_chats"))
+
+    @unittest.skipUnless(
+        (HOME / "Strata-data").is_dir(),
+        "the engine home is machine-local: a CI runner has no ~/Strata-data, so this half is "
+        "a property of this box, not of the code"
+    )
+    def test_the_engine_home_aliases_exist_here(self) -> None:
+        for alias in ("~/Strata-data", "~/Strata"):
             self.assertTrue(Path(relocate(alias)).exists(), relocate(alias))
 
 
