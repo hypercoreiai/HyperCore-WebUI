@@ -1,3 +1,6 @@
+> Superseded by [PLAN_v2.md](PLAN_v2.md) (version 1.9.1, 2026-10-19). This file is kept as the
+> record of what was approved; the merged file is the one to read.
+
 # HyperCore-WebUI - Framework Specification v3 (framework closed - approved)
 
 Repo: hypercoreiai/HyperCore-WebUI

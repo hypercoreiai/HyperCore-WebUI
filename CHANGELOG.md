@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.1.0 - in development
+## 1.9.1 - in development
+
+- **Version marker.** The project is marked 1.9.1: `pyproject.toml` carries
+  `version = "1.9.1"`, the repository carries the annotated tag `v1.9.1`, and `PLAN_v2.md` is
+  the single plan file. `PLAN.md`, `PLAN_CHECKLIST1.md` and `PLAN_CHECKLIST2.md` are merged
+  into it and each keeps a one-line pointer to it.
+
+### 0.1.0 - the in-development record, now under 1.9.1
 
 The HyperCore web app (Chat, Assist, Monitor, About) running on a stock Strata
 engine, plus two tabs the engine does not ship: Tune and Build.
@@ -34,13 +41,21 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   `serve/vision.py`, leaving 4,882 lines with the routes unchanged; `pytest.ini` collects
   `serve/mcp/tests` as well as `tests/` (704 cases, up from 466); `pyproject.toml` and
   `requirements-dev.txt` declare the tooling and `.github/workflows/ci.yml` gates on ruff,
-  pytest and the 18 node suites; the 20 handlers that swallowed an exception with `pass` are
+  pytest and the 19 node suites; the 20 handlers that swallowed an exception with `pass` are
   down to 6, each one naming why it swallows; `requirements.txt` gives every entry a lower
   bound; `tools/build_history.py` reads the home of whoever runs it instead of a hardcoded
   `/home/ai-user0`; the test fixtures (`frame_fixture.py`, `mcp_fake_server.py`, `flood_stub.py`,
   `monitor_demo.py`, `chat_golden.json`) are out of the production package; and `data/history/`
   (chats, topics, notes, index.json, sources.md) is tracked, while the 114 MB raw transcript
   archive stays machine-local.
+- **The node suites share their plumbing**: `tests/dom_stub.js` holds the source read, the block
+  cut, the stub DOM, and the pass/fail counter that each suite used to carry its own copy of, and
+  `tests/test_dom_stub.js` checks that plumbing itself. A marker that has moved now fails with the
+  marker quoted instead of a bare "the test broke", and a suite reads `serve/web/app.js` from the
+  repository root instead of the current directory. The six text-only suites (`test_build_tab_scroll.js`,
+  `test_build_tab_order.js`, `test_strata_hook_ui.js`, `test_surface_slider.js`,
+  `test_tool_round_meta.js`, `test_prefix_tokens.js`) run through it; the runner and the CI step now
+  glob `tests/test_*.js` so the helper is not run as a suite.
 - **A build runs with the settings the Setup choices hold**: `Clone and build from source` sent
   only the cmake options, so the run config it wrote was a copy of the nearest config on the box
   - `config/run-example.json` when there is none - and the context, KV cache and port in the
@@ -597,3 +612,13 @@ engine, plus two tabs the engine does not ship: Tune and Build.
   `tests/*.js` files through node inside pytest, so a Stop/Start pair, the two-click Shut Down,
   the surface slider or the token-prefix folding regression cannot pass a `pytest` run. A machine
   without node skips the suite and says why; the skip is reported, never silent.
+- **Long-term memory in the system prompt** (`prompts/prompt.json`, v11): the prompt now names
+  a third resource, `data/memory/`, the part of the context that survives compaction. One idea
+  per file, the filename reflecting what the idea is about, written when a fact, decision, list
+  or open item would be lost by the summary that replaces the earlier turns, deleted when it
+  stops mattering, and never more than 250 files at a time. `tests/test_prompt_memory.py` checks
+  the rule parses, states those five things, names a folder that exists here, and survives the
+  renderer inside the 20,000-character ceiling (the system prompt renders to 9,908 characters
+  today). Fixed while doing it: `data/memory/` was `user0:user0` at 755, so the file tools
+  running as `ai-user0` could not write into it; it is `ai-user0:dev-sandbox` at 775 now, which
+  both users write through.

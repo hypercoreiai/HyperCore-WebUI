@@ -1,6 +1,6 @@
 [project]
 name = "hypercore-webui"
-version = "0.1.0"
+version = "1.9.1"   # matches the git tag v1.9.1 and the CHANGELOG entry
 description = "HyperCore web app (Chat, Assist, Monitor, Tune, Build, About) over a Strata engine."
 requires-python = ">=3.11"
 

@@ -1,3 +1,6 @@
+> Superseded by [PLAN_v2.md](PLAN_v2.md) (version 1.9.1, 2026-10-19); its section 13 is this
+> list, deduplicated against PLAN_CHECKLIST1.md.
+
 ## Status: implemented, with the test that proves it
 
 | Deliverable | State | Where |
