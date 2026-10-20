@@ -20,8 +20,8 @@ from __future__ import annotations
 import unittest
 
 from serve.engine_supervisor import HyperCoreProcessSupervisor, WorkerRejected
-from tests.frame_fixture import ScriptedWorker
 from serve.ipc_parser import CMD_CANCEL, CMD_SUBMIT, STREAM_TERMINAL, STREAM_TOKEN
+from tests.frame_fixture import ScriptedWorker
 
 
 def wired(**kwargs) -> tuple[HyperCoreProcessSupervisor, ScriptedWorker]:

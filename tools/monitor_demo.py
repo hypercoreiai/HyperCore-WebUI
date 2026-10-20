@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from serve.engine_supervisor import HyperCoreProcessSupervisor
-from tests.frame_fixture import ScriptedWorker
 from serve.frontend import ChatTemplate
 from serve.server import ByteTokenizer, HyperCoreRequestHandler, Service, serve
+from tests.frame_fixture import ScriptedWorker
 
 
 def make_service() -> tuple[Service, HyperCoreProcessSupervisor]:
